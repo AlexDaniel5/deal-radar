@@ -1,0 +1,241 @@
+"""Tests for scan_item orchestration and the filter helpers (with fakes)."""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+from typing import Any
+
+from deal_radar.config.schema import AIConfig, ItemConfig, MarketplaceConfig
+from deal_radar.marketplaces.base import SearchContext
+from deal_radar.models import Evaluation, Listing, NotificationEvent
+from deal_radar.pipeline import passes_keyword_filters, scan_item, within_price
+
+AI = AIConfig(min_rating=4)
+
+
+class FakeMarket:
+    name = "fake"
+
+    def __init__(self, listings: list[Listing]) -> None:
+        self._listings = listings
+
+    def __enter__(self) -> FakeMarket:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+    def search(self, item: ItemConfig, ctx: SearchContext) -> Iterator[Listing]:
+        yield from self._listings
+
+
+class FakeStore:
+    def __init__(self) -> None:
+        self.seen: set[tuple[str, str]] = set()
+        self.marked: list[tuple[str, Evaluation | None]] = []
+
+    def is_seen(self, item_name: str, listing_id: str) -> bool:
+        return (item_name, listing_id) in self.seen
+
+    def mark_seen(
+        self, item_name: str, listing: Listing, evaluation: Evaluation | None = None
+    ) -> None:
+        self.seen.add((item_name, listing.id))
+        self.marked.append((listing.id, evaluation))
+
+    def last_price(self, item_name: str, listing_id: str) -> float | None:
+        return None
+
+
+class FakeEval:
+    def __init__(self, mapping: dict[str, Evaluation]) -> None:
+        self.mapping = mapping
+        self.calls: list[str] = []
+
+    def evaluate(self, item: ItemConfig, listing: Listing) -> Evaluation:
+        self.calls.append(listing.id)
+        return self.mapping[listing.id]
+
+
+class FakeNotifier:
+    type = "fake"
+
+    def __init__(self) -> None:
+        self.events: list[NotificationEvent] = []
+
+    def notify(self, event: NotificationEvent) -> None:
+        self.events.append(event)
+
+
+def _item(**kw: Any) -> ItemConfig:
+    base: dict[str, Any] = {
+        "name": "PC",
+        "marketplaces": ["fake"],
+        "search_phrases": ["pc"],
+        "description": "want an rtx desktop",
+    }
+    base.update(kw)
+    return ItemConfig(**base)
+
+
+def _listing(listing_id: str, title: str = "RTX PC", price: float | None = 500.0) -> Listing:
+    return Listing(
+        id=listing_id, marketplace="fake", title=title, url=f"u/{listing_id}", price=price
+    )
+
+
+def _ctx() -> SearchContext:
+    return SearchContext(config=MarketplaceConfig())
+
+
+def _good(rating: int = 5) -> Evaluation:
+    return Evaluation(match=True, rating=rating, rationale="r", model="m")
+
+
+def test_match_notifies() -> None:
+    ev = FakeEval({"1": _good()})
+    store, notifier = FakeStore(), FakeNotifier()
+    stats = scan_item(
+        item=_item(),
+        marketplace=FakeMarket([_listing("1")]),
+        ctx=_ctx(),
+        evaluator=ev,
+        store=store,
+        notifiers=[notifier],
+        ai=AI,
+    )
+    assert stats.matched == 1
+    assert stats.notified == 1
+    assert len(notifier.events) == 1
+    assert store.is_seen("PC", "1")
+
+
+def test_below_threshold_not_notified() -> None:
+    ev = FakeEval({"1": _good(rating=3)})
+    notifier = FakeNotifier()
+    stats = scan_item(
+        item=_item(),
+        marketplace=FakeMarket([_listing("1")]),
+        ctx=_ctx(),
+        evaluator=ev,
+        store=FakeStore(),
+        notifiers=[notifier],
+        ai=AI,
+    )
+    assert stats.matched == 0
+    assert not notifier.events
+
+
+def test_seen_is_skipped_before_eval() -> None:
+    store = FakeStore()
+    store.seen.add(("PC", "1"))
+    ev = FakeEval({})
+    stats = scan_item(
+        item=_item(),
+        marketplace=FakeMarket([_listing("1")]),
+        ctx=_ctx(),
+        evaluator=ev,
+        store=store,
+        notifiers=[],
+        ai=AI,
+    )
+    assert stats.skipped_seen == 1
+    assert ev.calls == []
+
+
+def test_exclude_keyword_filters_and_marks_seen() -> None:
+    ev = FakeEval({})
+    store = FakeStore()
+    stats = scan_item(
+        item=_item(exclude_keywords=["broken"]),
+        marketplace=FakeMarket([_listing("1", title="broken RTX PC")]),
+        ctx=_ctx(),
+        evaluator=ev,
+        store=store,
+        notifiers=[],
+        ai=AI,
+    )
+    assert stats.skipped_filter == 1
+    assert ev.calls == []
+    assert store.is_seen("PC", "1")
+
+
+def test_price_out_of_range_filters() -> None:
+    ev = FakeEval({})
+    stats = scan_item(
+        item=_item(price_max=400),
+        marketplace=FakeMarket([_listing("1", price=900.0)]),
+        ctx=_ctx(),
+        evaluator=ev,
+        store=FakeStore(),
+        notifiers=[],
+        ai=AI,
+    )
+    assert stats.skipped_filter == 1
+    assert ev.calls == []
+
+
+def test_dry_run_counts_match_but_does_not_notify() -> None:
+    ev = FakeEval({"1": _good()})
+    notifier = FakeNotifier()
+    stats = scan_item(
+        item=_item(),
+        marketplace=FakeMarket([_listing("1")]),
+        ctx=_ctx(),
+        evaluator=ev,
+        store=FakeStore(),
+        notifiers=[notifier],
+        ai=AI,
+        dry_run=True,
+    )
+    assert stats.matched == 1
+    assert stats.notified == 0
+    assert not notifier.events
+
+
+def test_eval_error_counted_and_scan_continues() -> None:
+    class BoomEval:
+        def evaluate(self, item: ItemConfig, listing: Listing) -> Evaluation:
+            raise RuntimeError("boom")
+
+    stats = scan_item(
+        item=_item(),
+        marketplace=FakeMarket([_listing("1"), _listing("2")]),
+        ctx=_ctx(),
+        evaluator=BoomEval(),
+        store=FakeStore(),
+        notifiers=[],
+        ai=AI,
+    )
+    assert stats.errors == 2
+    assert stats.evaluated == 0
+
+
+def test_max_evaluations_caps_calls() -> None:
+    listings = [_listing(str(i)) for i in range(5)]
+    ev = FakeEval({str(i): _good(rating=1) for i in range(5)})
+    stats = scan_item(
+        item=_item(),
+        marketplace=FakeMarket(listings),
+        ctx=_ctx(),
+        evaluator=ev,
+        store=FakeStore(),
+        notifiers=[],
+        ai=AI,
+        max_evaluations=2,
+    )
+    assert stats.evaluated == 2
+
+
+def test_keyword_filter_helper() -> None:
+    item = _item(include_keywords=["rtx"], exclude_keywords=["broken"])
+    assert passes_keyword_filters(_listing("1", title="RTX 3070"), item)
+    assert not passes_keyword_filters(_listing("1", title="GTX 1050"), item)
+    assert not passes_keyword_filters(_listing("1", title="broken RTX"), item)
+
+
+def test_within_price_helper() -> None:
+    item = _item(price_min=400, price_max=1000)
+    assert within_price(_listing("1", price=500.0), item)
+    assert not within_price(_listing("1", price=200.0), item)
+    assert within_price(_listing("1", price=None), item)

@@ -20,9 +20,17 @@ class SearchContext:
 
 @runtime_checkable
 class Marketplace(Protocol):
-    """Searches a marketplace and yields parsed listings for an item."""
+    """Searches a marketplace and yields parsed listings for an item.
+
+    Adapters are context managers so they can own a browser session for the
+    duration of a run.
+    """
 
     name: str
+
+    def __enter__(self) -> Marketplace: ...
+
+    def __exit__(self, *exc: object) -> None: ...
 
     def search(self, item: ItemConfig, ctx: SearchContext) -> Iterator[Listing]:
         """Yield listings matching ``item``'s search phrases / filters."""

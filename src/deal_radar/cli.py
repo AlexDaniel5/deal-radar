@@ -1,26 +1,33 @@
-"""Command-line interface for deal-radar.
-
-Phase 0 ships a working ``validate-config``; ``run``, ``run-once``, and
-``list-seen`` are placeholders until later phases.
-"""
+"""Command-line interface for deal-radar."""
 
 from __future__ import annotations
 
 import argparse
 from collections.abc import Sequence
 
-from . import __version__
+from . import __version__, paths
 from .config.loader import load_config, load_dotenv_if_present
+from .config.schema import AppConfig, ItemConfig
 from .errors import ConfigError, DealRadarError
 from .logging import configure_logging, get_logger
+from .pipeline import ScanStats, scan_item
 
 log = get_logger("cli")
 
-_NOT_IMPLEMENTED: dict[str, str] = {
-    "run": "Phase 2 (scheduled loop)",
-    "run-once": "Phase 1 (single scan)",
-    "list-seen": "Phase 1 (SQLite seen store)",
-}
+
+def _print_stats(stats: ScanStats) -> None:
+    print(
+        f"  {stats.item}: found={stats.found} new_seen_skipped={stats.skipped_seen} "
+        f"filtered={stats.skipped_filter} evaluated={stats.evaluated} "
+        f"matched={stats.matched} notified={stats.notified} errors={stats.errors}"
+    )
+
+
+def _select_items(cfg: AppConfig, only: str | None) -> list[ItemConfig]:
+    items = [i for i in cfg.items if i.enabled and (only is None or i.name == only)]
+    if only is not None and not items:
+        raise ConfigError(f"no enabled item named {only!r}")
+    return items
 
 
 def _cmd_validate(args: argparse.Namespace) -> int:
@@ -33,8 +40,7 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     )
     if cfg.marketplaces:
         mks = ", ".join(
-            f"{name}{'' if mk.enabled else ' (disabled)'}"
-            for name, mk in cfg.marketplaces.items()
+            f"{name}{'' if mk.enabled else ' (disabled)'}" for name, mk in cfg.marketplaces.items()
         )
     else:
         mks = "(none)"
@@ -45,22 +51,108 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     for item in cfg.items:
         flag = "" if item.enabled else " (disabled)"
         print(
-            f"    - {item.name}{flag}: "
-            f"phrases={len(item.search_phrases)} "
-            f"markets={item.marketplaces} "
-            f"min_rating={item.effective_min_rating(cfg.ai)}"
+            f"    - {item.name}{flag}: phrases={len(item.search_phrases)} "
+            f"markets={item.marketplaces} min_rating={item.effective_min_rating(cfg.ai)}"
         )
     return 0
 
 
-def _cmd_stub(args: argparse.Namespace) -> int:
-    phase = _NOT_IMPLEMENTED.get(args.command, "a later phase")
-    log.error("'%s' is not implemented yet (planned for %s).", args.command, phase)
-    return 2
+def _cmd_run_once(args: argparse.Namespace) -> int:
+    # Imports are local so `validate-config`/`list-seen` don't pull heavy deps.
+    from .ai.claude import ClaudeEvaluator
+    from .dedup.sqlite_store import SqliteSeenStore
+    from .marketplaces.base import SearchContext
+    from .marketplaces.registry import build_marketplace
+    from .notifiers.registry import build_notifier
+
+    cfg = load_config(args.config)
+    items = _select_items(cfg, args.item)
+    paths.ensure_data_dir()
+
+    evaluator = ClaudeEvaluator(cfg.ai)
+    notifiers = [build_notifier(n) for n in cfg.notifiers]
+
+    needed = {
+        m
+        for item in items
+        for m in item.marketplaces
+        if m in cfg.marketplaces and cfg.marketplaces[m].enabled
+    }
+    if not needed:
+        print("nothing to do: no enabled marketplaces referenced by selected items")
+        return 0
+
+    print(f"run-once: {len(items)} item(s), marketplaces={sorted(needed)}, dry_run={args.dry_run}")
+    with SqliteSeenStore(paths.db_path()) as store:
+        for mname in sorted(needed):
+            mk_cfg = cfg.marketplaces[mname]
+            marketplace = build_marketplace(
+                mname, mk_cfg, headless=not args.headful, max_results=args.limit
+            )
+            with marketplace:
+                ctx = SearchContext(config=mk_cfg, dry_run=args.dry_run)
+                for item in items:
+                    if mname not in item.marketplaces:
+                        continue
+                    stats = scan_item(
+                        item=item,
+                        marketplace=marketplace,
+                        ctx=ctx,
+                        evaluator=evaluator,
+                        store=store,
+                        notifiers=notifiers,
+                        ai=cfg.ai,
+                        max_evaluations=args.max_evals,
+                        dry_run=args.dry_run,
+                    )
+                    _print_stats(stats)
+    return 0
+
+
+def _cmd_login(args: argparse.Namespace) -> int:
+    from .marketplaces.facebook import capture_session
+
+    cfg = load_config(args.config)
+    name = args.marketplace
+    mk_cfg = cfg.marketplaces.get(name)
+    if mk_cfg is None:
+        raise ConfigError(f"marketplace {name!r} is not configured")
+    if name != "facebook":
+        raise ConfigError(f"login is only implemented for 'facebook' (got {name!r})")
+
+    def wait_for_login() -> None:
+        input(
+            "\nA browser window has opened. Log in to Facebook, then press Enter here "
+            "to save the session... "
+        )
+
+    path = capture_session(mk_cfg, wait_for_login=wait_for_login)
+    print(f"saved session: {path}")
+    return 0
+
+
+def _cmd_list_seen(args: argparse.Namespace) -> int:
+    from .dedup.sqlite_store import SqliteSeenStore
+
+    db = paths.db_path()
+    if not db.is_file():
+        print(f"no seen store yet at {db}")
+        return 0
+    with SqliteSeenStore(db) as store:
+        rows = store.list_seen(args.item)
+    if not rows:
+        print("(no listings recorded)")
+        return 0
+    for row in rows[: args.limit]:
+        price = f"{row['last_price']:.0f}" if row["last_price"] is not None else "?"
+        rating = row["rating"] if row["rating"] is not None else "-"
+        print(f"  [{rating}/5] {price:>6}  {row['item_name']}: {row['title']}  {row['url']}")
+    print(f"({len(rows)} total)")
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="deal-radar", description=__doc__)
+    parser = argparse.ArgumentParser(prog="deal-radar", description="Marketplace deal monitor.")
     parser.add_argument("--version", action="version", version=f"deal-radar {__version__}")
     parser.add_argument(
         "--log-level",
@@ -70,23 +162,51 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", metavar="<command>")
 
-    def add(name: str, help_text: str) -> argparse.ArgumentParser:
-        sp = sub.add_parser(name, help=help_text)
-        sp.add_argument(
-            "--config",
-            default="config.yaml",
-            help="path to the YAML config (default: config.yaml)",
-        )
+    def with_config(sp: argparse.ArgumentParser) -> argparse.ArgumentParser:
+        sp.add_argument("--config", default="config.yaml", help="path to the YAML config")
         return sp
 
-    add("validate-config", "load and validate the config, then exit").set_defaults(
-        func=_cmd_validate
+    p_validate = with_config(sub.add_parser("validate-config", help="validate the config and exit"))
+    p_validate.set_defaults(func=_cmd_validate)
+
+    p_run_once = with_config(sub.add_parser("run-once", help="run a single scan of all items"))
+    p_run_once.add_argument("--item", default=None, help="only scan the item with this name")
+    p_run_once.add_argument(
+        "--limit", type=int, default=40, help="max listings to collect per marketplace (default 40)"
     )
-    add("run-once", "run a single scan of all items (Phase 1)").set_defaults(func=_cmd_stub)
-    add("run", "run the polling loop (Phase 2)").set_defaults(func=_cmd_stub)
-    add("list-seen", "list previously seen listings (Phase 1)").set_defaults(func=_cmd_stub)
+    p_run_once.add_argument(
+        "--max-evals",
+        dest="max_evals",
+        type=int,
+        default=25,
+        help="max AI evaluations per item per run (default 25)",
+    )
+    p_run_once.add_argument(
+        "--dry-run", action="store_true", help="evaluate but do not send notifications"
+    )
+    p_run_once.add_argument(
+        "--headful", action="store_true", help="show the browser window (default: headless)"
+    )
+    p_run_once.set_defaults(func=_cmd_run_once)
+
+    p_run = with_config(sub.add_parser("run", help="run the polling loop (Phase 2)"))
+    p_run.set_defaults(func=_cmd_stub, command="run")
+
+    p_login = with_config(sub.add_parser("login", help="log in once and save a browser session"))
+    p_login.add_argument("marketplace", nargs="?", default="facebook", help="marketplace to log in")
+    p_login.set_defaults(func=_cmd_login)
+
+    p_list = with_config(sub.add_parser("list-seen", help="list previously seen listings"))
+    p_list.add_argument("--item", default=None, help="only this item")
+    p_list.add_argument("--limit", type=int, default=50, help="max rows to print")
+    p_list.set_defaults(func=_cmd_list_seen)
 
     return parser
+
+
+def _cmd_stub(args: argparse.Namespace) -> int:
+    log.error("'%s' is not implemented yet (planned for Phase 2).", args.command)
+    return 2
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -107,6 +227,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     except DealRadarError as exc:
         log.error("%s", exc)
         return 1
+    except KeyboardInterrupt:
+        print("\ninterrupted")
+        return 130
 
 
 if __name__ == "__main__":
