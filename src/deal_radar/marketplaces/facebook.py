@@ -199,6 +199,14 @@ class FacebookMarketplace:
             except Exception:  # noqa: BLE001 - element may have detached
                 continue
             price, title, location = _parse_card_text(text)
+            log.debug(
+                "card id=%s price=%s title=%r location=%r raw=%r",
+                item_id,
+                price,
+                title,
+                location,
+                text.replace("\n", " | "),
+            )
             if not title:
                 continue
             seen_ids.add(item_id)

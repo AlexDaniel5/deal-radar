@@ -152,24 +152,31 @@ def _cmd_list_seen(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="deal-radar", description="Marketplace deal monitor.")
-    parser.add_argument("--version", action="version", version=f"deal-radar {__version__}")
-    parser.add_argument(
+    # --log-level lives on a shared parent so it is accepted both before and
+    # after the subcommand (SUPPRESS default so the after-position copy never
+    # clobbers a value set before the subcommand).
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument(
         "--log-level",
-        default="INFO",
+        default=argparse.SUPPRESS,
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-        help="logging verbosity (default: INFO)",
+        help="logging verbosity (default: INFO); accepted before or after the command",
     )
+
+    parser = argparse.ArgumentParser(
+        prog="deal-radar", description="Marketplace deal monitor.", parents=[common]
+    )
+    parser.add_argument("--version", action="version", version=f"deal-radar {__version__}")
     sub = parser.add_subparsers(dest="command", metavar="<command>")
 
-    def with_config(sp: argparse.ArgumentParser) -> argparse.ArgumentParser:
+    def with_config(name: str, help_text: str) -> argparse.ArgumentParser:
+        sp = sub.add_parser(name, help=help_text, parents=[common])
         sp.add_argument("--config", default="config.yaml", help="path to the YAML config")
         return sp
 
-    p_validate = with_config(sub.add_parser("validate-config", help="validate the config and exit"))
-    p_validate.set_defaults(func=_cmd_validate)
+    with_config("validate-config", "validate the config and exit").set_defaults(func=_cmd_validate)
 
-    p_run_once = with_config(sub.add_parser("run-once", help="run a single scan of all items"))
+    p_run_once = with_config("run-once", "run a single scan of all items")
     p_run_once.add_argument("--item", default=None, help="only scan the item with this name")
     p_run_once.add_argument(
         "--limit", type=int, default=40, help="max listings to collect per marketplace (default 40)"
@@ -189,14 +196,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_run_once.set_defaults(func=_cmd_run_once)
 
-    p_run = with_config(sub.add_parser("run", help="run the polling loop (Phase 2)"))
-    p_run.set_defaults(func=_cmd_stub, command="run")
+    with_config("run", "run the polling loop (Phase 2)").set_defaults(func=_cmd_stub)
 
-    p_login = with_config(sub.add_parser("login", help="log in once and save a browser session"))
+    p_login = with_config("login", "log in once and save a browser session")
     p_login.add_argument("marketplace", nargs="?", default="facebook", help="marketplace to log in")
     p_login.set_defaults(func=_cmd_login)
 
-    p_list = with_config(sub.add_parser("list-seen", help="list previously seen listings"))
+    p_list = with_config("list-seen", "list previously seen listings")
     p_list.add_argument("--item", default=None, help="only this item")
     p_list.add_argument("--limit", type=int, default=50, help="max rows to print")
     p_list.set_defaults(func=_cmd_list_seen)
@@ -212,7 +218,7 @@ def _cmd_stub(args: argparse.Namespace) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    configure_logging(args.log_level)
+    configure_logging(getattr(args, "log_level", "INFO"))
     load_dotenv_if_present()
 
     func = getattr(args, "func", None)
