@@ -1,0 +1,67 @@
+# deal-radar config template. Copy to config.yaml (gitignored) and edit.
+# Secrets must NOT go here directly — use ${ENV_VAR} references (resolved from
+# the environment / .env). The Anthropic API key is read from the environment
+# by the evaluator and is not referenced in this file.
+version: 1
+
+ai:
+  provider: anthropic
+  model: claude-haiku-4-5      # cheap/fast for high-volume classification
+  min_rating: 4               # 1-5; only notify at/above this
+  analyze_images: false       # true => send listing photos to Claude (higher cost)
+  max_images: 3
+
+marketplaces:
+  facebook:
+    enabled: true
+    session_path: null         # null => data dir default; persisted login state
+    default_location: "Toronto, ON"
+    default_radius_km: 40
+
+schedule:
+  poll_interval_seconds: 1800   # 30 min — conservative / polite
+  jitter_seconds: 600
+  per_request_min_interval_seconds: 25
+
+notifiers:
+  - type: ntfy
+    topic: your-ntfy-topic-here
+    server: https://ntfy.sh
+  # Telegram example (uncomment and set env vars to use):
+  # - type: telegram
+  #   bot_token: ${TELEGRAM_BOT_TOKEN}
+  #   chat_id: ${TELEGRAM_CHAT_ID}
+
+items:
+  - name: "Gaming PC (RTX 30-series)"
+    enabled: true
+    marketplaces: [facebook]
+    search_phrases: ["gaming pc", "gaming computer", "rtx 3070", "rtx 3080"]
+    include_keywords: ["rtx", "ryzen", "intel i7", "i9"]
+    exclude_keywords: ["broken", "for parts", "prebuilt office", "gtx 1050"]
+    price_min: 400
+    price_max: 1100
+    location: "Toronto, ON"
+    radius_km: 50
+    description: >
+      A modern gaming desktop with an RTX 3070 or better and a Ryzen 5/7 or
+      Intel i5/i7 (10th gen or newer). Want 16GB+ RAM and an SSD. Not
+      interested in old office PCs, GTX 16-series cards, or parts-only units.
+      A good deal is meaningfully below typical local resale for the GPU.
+
+  - name: "Road bike (54-56cm)"
+    enabled: true
+    marketplaces: [facebook]
+    search_phrases: ["road bike", "carbon road bike", "shimano 105 road bike"]
+    include_keywords: ["carbon", "shimano", "105", "ultegra", "aluminum"]
+    exclude_keywords: ["kids", "mountain bike", "hybrid", "rusty", "frame only"]
+    price_min: 200
+    price_max: 900
+    location: "Toronto, ON"
+    radius_km: 30
+    min_rating: 5                # stricter for this item
+    description: >
+      A road bike with a 54-56cm frame, Shimano 105 or better groupset, carbon
+      or quality aluminum frame, in good working condition. Not interested in
+      kids' bikes, mountain/hybrid bikes, frame-only listings, or anything
+      described as rusty or needing major repair.
