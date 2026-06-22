@@ -5,10 +5,10 @@ from __future__ import annotations
 from collections.abc import Iterator
 from typing import Any
 
-from deal_radar.config.schema import AIConfig, ItemConfig, MarketplaceConfig
+from deal_radar.config.schema import AIConfig, AppConfig, ItemConfig, MarketplaceConfig
 from deal_radar.marketplaces.base import SearchContext
 from deal_radar.models import Evaluation, Listing, NotificationEvent
-from deal_radar.pipeline import passes_keyword_filters, scan_item, within_price
+from deal_radar.pipeline import passes_keyword_filters, scan_all, scan_item, within_price
 
 AI = AIConfig(min_rating=4)
 
@@ -228,9 +228,11 @@ def test_max_evaluations_caps_calls() -> None:
 
 
 def test_keyword_filter_helper() -> None:
+    # include_keywords are a soft signal now: only exclude_keywords hard-filter.
     item = _item(include_keywords=["rtx"], exclude_keywords=["broken"])
     assert passes_keyword_filters(_listing("1", title="RTX 3070"), item)
-    assert not passes_keyword_filters(_listing("1", title="GTX 1050"), item)
+    # No longer rejected for missing an include keyword — the AI judges the match.
+    assert passes_keyword_filters(_listing("1", title="GTX 1050"), item)
     assert not passes_keyword_filters(_listing("1", title="broken RTX"), item)
 
 
@@ -239,3 +241,57 @@ def test_within_price_helper() -> None:
     assert within_price(_listing("1", price=500.0), item)
     assert not within_price(_listing("1", price=200.0), item)
     assert within_price(_listing("1", price=None), item)
+
+
+def _app_config(items: list[ItemConfig]) -> AppConfig:
+    return AppConfig(
+        ai=AI,
+        marketplaces={"fake": MarketplaceConfig()},
+        notifiers=[{"type": "ntfy", "topic": "t"}],
+        items=items,
+    )
+
+
+def test_scan_all_scans_each_item_and_reports_stats() -> None:
+    item = _item()
+    cfg = _app_config([item])
+    market = FakeMarket([_listing("1"), _listing("2")])
+    ev = FakeEval({"1": _good(), "2": _good(rating=2)})
+    store, notifier = FakeStore(), FakeNotifier()
+    seen_stats: list[str] = []
+
+    results = scan_all(
+        cfg=cfg,
+        items=[item],
+        make_marketplace=lambda name, mk_cfg: market,
+        evaluator=ev,
+        store=store,
+        notifiers=[notifier],
+        on_stats=lambda s: seen_stats.append(s.item),
+    )
+    assert len(results) == 1
+    assert results[0].found == 2
+    assert results[0].matched == 1  # only "1" clears the rating-4 threshold
+    assert seen_stats == ["PC"]
+
+
+def test_scan_all_skips_disabled_marketplace() -> None:
+    item = _item()
+    cfg = _app_config([item])
+    cfg.marketplaces["fake"].enabled = False
+    calls = {"n": 0}
+
+    def make(name: str, mk_cfg: MarketplaceConfig) -> FakeMarket:
+        calls["n"] += 1
+        return FakeMarket([_listing("1")])
+
+    results = scan_all(
+        cfg=cfg,
+        items=[item],
+        make_marketplace=make,
+        evaluator=FakeEval({}),
+        store=FakeStore(),
+        notifiers=[],
+    )
+    assert results == []
+    assert calls["n"] == 0  # never built the disabled marketplace

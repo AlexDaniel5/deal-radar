@@ -31,6 +31,15 @@ log = get_logger("marketplace.facebook")
 _ITEM_ID_RE = re.compile(r"/marketplace/item/(\d+)")
 _PRICE_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
 _ITEM_ANCHOR = 'a[href*="/marketplace/item/"]'
+# Status badges Facebook prepends to a card's text; never a real title.
+_BADGE_RE = re.compile(r"^(just listed|new)$", re.IGNORECASE)
+
+
+def _detect_currency(text: str) -> str:
+    """Best-effort currency from a card's text. FB shows 'CA$' for CAD, '$' for USD."""
+    if "CA$" in text or "C$" in text:
+        return "CAD"
+    return "USD"
 
 
 def _extract_item_id(href: str) -> str | None:
@@ -55,23 +64,49 @@ def _parse_price(text: str) -> float | None:
 
 
 def _parse_card_text(text: str) -> tuple[float | None, str, str | None]:
-    """Best-effort split of a listing card's text into (price, title, location)."""
+    """Best-effort split of a listing card's text into (price, title, location).
+
+    Observed card format is::
+
+        Just listed | CA$<price> [| CA$<orig price>] | <TITLE> | <City, ST>
+
+    i.e. an optional status badge, the asking price (plus an optional
+    struck-through original price on sale items), the title, then the location.
+    The title is whatever sits between the price block and the trailing location.
+    """
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     if not lines:
         return None, "", None
 
+    # Asking price = first price line; sale items add a struck-through original.
     price: float | None = None
-    price_idx: int | None = None
+    price_indices: list[int] = []
     for i, ln in enumerate(lines):
         if "$" in ln or "free" in ln.lower():
             parsed = _parse_price(ln)
             if parsed is not None:
-                price, price_idx = parsed, i
-                break
+                price_indices.append(i)
+                if price is None:
+                    price = parsed
 
-    remaining = [ln for i, ln in enumerate(lines) if i != price_idx]
-    title = remaining[0] if remaining else lines[0]
-    location = remaining[-1] if len(remaining) > 1 else None
+    last_price_idx = price_indices[-1] if price_indices else -1
+    location = lines[-1] if len(lines) > 1 else None
+    location_idx = len(lines) - 1 if location is not None else len(lines)
+
+    # Title sits after the price block and before the location, skipping badges.
+    title_candidates = [
+        ln
+        for i, ln in enumerate(lines)
+        if i > last_price_idx and i != location_idx and not _BADGE_RE.match(ln)
+    ]
+    if not title_candidates:
+        # Sparse/odd card: fall back to any non-price, non-badge, non-location line.
+        title_candidates = [
+            ln
+            for i, ln in enumerate(lines)
+            if i not in price_indices and i != location_idx and not _BADGE_RE.match(ln)
+        ]
+    title = title_candidates[0] if title_candidates else lines[0]
     return price, title, location
 
 
@@ -216,7 +251,7 @@ class FacebookMarketplace:
                 title=title,
                 url=f"https://www.facebook.com/marketplace/item/{item_id}/",
                 price=price,
-                currency="USD",
+                currency=_detect_currency(text),
                 location=location,
                 description=text.strip(),
             )

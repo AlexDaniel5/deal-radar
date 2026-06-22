@@ -56,7 +56,7 @@ def test_env_resolution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
     data["notifiers"] = [{"type": "ntfy", "topic": "${DR_TEST_TOPIC}"}]
     cfg = load_config(_write(tmp_path, data))
     assert cfg.notifiers[0].type == "ntfy"
-    assert cfg.notifiers[0].topic == "resolved-topic"  # type: ignore[union-attr]
+    assert cfg.notifiers[0].topic == "resolved-topic"
 
 
 def test_missing_env_var_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

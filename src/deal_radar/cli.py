@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from typing import TYPE_CHECKING
 
 from . import __version__, paths
 from .config.loader import load_config, load_dotenv_if_present
-from .config.schema import AppConfig, ItemConfig
+from .config.schema import AppConfig, ItemConfig, MarketplaceConfig
 from .errors import ConfigError, DealRadarError
 from .logging import configure_logging, get_logger
-from .pipeline import ScanStats, scan_item
+from .pipeline import ScanStats
+
+if TYPE_CHECKING:
+    from .marketplaces.base import Marketplace
 
 log = get_logger("cli")
 
@@ -28,6 +32,25 @@ def _select_items(cfg: AppConfig, only: str | None) -> list[ItemConfig]:
     if only is not None and not items:
         raise ConfigError(f"no enabled item named {only!r}")
     return items
+
+
+def _marketplace_factory(
+    cfg: AppConfig, *, headless: bool, max_results: int
+) -> Callable[[str, MarketplaceConfig], Marketplace]:
+    """A ``(name, marketplace_config) -> Marketplace`` builder with config-driven pacing."""
+    from .marketplaces.registry import build_marketplace
+    from .ratelimit import RateLimiter
+
+    interval = cfg.schedule.per_request_min_interval_seconds
+    # Shared pacer across passes; jitter avoids perfectly periodic page loads.
+    pause = RateLimiter(interval, interval * 0.5)
+
+    def make(name: str, mk_cfg: MarketplaceConfig) -> Marketplace:
+        return build_marketplace(
+            name, mk_cfg, headless=headless, max_results=max_results, pause=pause
+        )
+
+    return make
 
 
 def _cmd_validate(args: argparse.Namespace) -> int:
@@ -61,9 +84,8 @@ def _cmd_run_once(args: argparse.Namespace) -> int:
     # Imports are local so `validate-config`/`list-seen` don't pull heavy deps.
     from .ai.claude import ClaudeEvaluator
     from .dedup.sqlite_store import SqliteSeenStore
-    from .marketplaces.base import SearchContext
-    from .marketplaces.registry import build_marketplace
     from .notifiers.registry import build_notifier
+    from .pipeline import scan_all
 
     cfg = load_config(args.config)
     items = _select_items(cfg, args.item)
@@ -71,41 +93,64 @@ def _cmd_run_once(args: argparse.Namespace) -> int:
 
     evaluator = ClaudeEvaluator(cfg.ai)
     notifiers = [build_notifier(n) for n in cfg.notifiers]
+    make_marketplace = _marketplace_factory(cfg, headless=not args.headful, max_results=args.limit)
 
-    needed = {
-        m
-        for item in items
-        for m in item.marketplaces
-        if m in cfg.marketplaces and cfg.marketplaces[m].enabled
-    }
-    if not needed:
-        print("nothing to do: no enabled marketplaces referenced by selected items")
-        return 0
-
-    print(f"run-once: {len(items)} item(s), marketplaces={sorted(needed)}, dry_run={args.dry_run}")
+    print(f"run-once: {len(items)} item(s), dry_run={args.dry_run}")
     with SqliteSeenStore(paths.db_path()) as store:
-        for mname in sorted(needed):
-            mk_cfg = cfg.marketplaces[mname]
-            marketplace = build_marketplace(
-                mname, mk_cfg, headless=not args.headful, max_results=args.limit
+        results = scan_all(
+            cfg=cfg,
+            items=items,
+            make_marketplace=make_marketplace,
+            evaluator=evaluator,
+            store=store,
+            notifiers=notifiers,
+            max_evaluations=args.max_evals,
+            dry_run=args.dry_run,
+            on_stats=_print_stats,
+        )
+    if not results:
+        print("nothing to do: no enabled marketplaces referenced by selected items")
+    return 0
+
+
+def _cmd_run(args: argparse.Namespace) -> int:
+    # Imports are local so `validate-config`/`list-seen` don't pull heavy deps.
+    from .ai.claude import ClaudeEvaluator
+    from .dedup.sqlite_store import SqliteSeenStore
+    from .notifiers.registry import build_notifier
+    from .pipeline import scan_all
+    from .scheduler import run_loop
+
+    cfg = load_config(args.config)
+    items = _select_items(cfg, args.item)
+    paths.ensure_data_dir()
+
+    evaluator = ClaudeEvaluator(cfg.ai)
+    notifiers = [build_notifier(n) for n in cfg.notifiers]
+    make_marketplace = _marketplace_factory(cfg, headless=not args.headful, max_results=args.limit)
+
+    sched = cfg.schedule
+    print(
+        f"run: {len(items)} item(s) every ~{sched.poll_interval_seconds}s "
+        f"(+/-{sched.jitter_seconds}s jitter), dry_run={args.dry_run}. Ctrl-C to stop."
+    )
+    with SqliteSeenStore(paths.db_path()) as store:
+
+        def scan() -> None:
+            scan_all(
+                cfg=cfg,
+                items=items,
+                make_marketplace=make_marketplace,
+                evaluator=evaluator,
+                store=store,
+                notifiers=notifiers,
+                max_evaluations=args.max_evals,
+                dry_run=args.dry_run,
+                on_stats=_print_stats,
             )
-            with marketplace:
-                ctx = SearchContext(config=mk_cfg, dry_run=args.dry_run)
-                for item in items:
-                    if mname not in item.marketplaces:
-                        continue
-                    stats = scan_item(
-                        item=item,
-                        marketplace=marketplace,
-                        ctx=ctx,
-                        evaluator=evaluator,
-                        store=store,
-                        notifiers=notifiers,
-                        ai=cfg.ai,
-                        max_evaluations=args.max_evals,
-                        dry_run=args.dry_run,
-                    )
-                    _print_stats(stats)
+
+        cycles = run_loop(scan=scan, schedule=sched, max_cycles=args.max_cycles)
+    print(f"stopped after {cycles} cycle(s)")
     return 0
 
 
@@ -196,7 +241,32 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_run_once.set_defaults(func=_cmd_run_once)
 
-    with_config("run", "run the polling loop (Phase 2)").set_defaults(func=_cmd_stub)
+    p_run = with_config("run", "run the polling loop (interval + jitter + rate limiting)")
+    p_run.add_argument("--item", default=None, help="only scan the item with this name")
+    p_run.add_argument(
+        "--limit", type=int, default=40, help="max listings to collect per marketplace (default 40)"
+    )
+    p_run.add_argument(
+        "--max-evals",
+        dest="max_evals",
+        type=int,
+        default=25,
+        help="max AI evaluations per item per cycle (default 25)",
+    )
+    p_run.add_argument(
+        "--dry-run", action="store_true", help="evaluate but do not send notifications"
+    )
+    p_run.add_argument(
+        "--headful", action="store_true", help="show the browser window (default: headless)"
+    )
+    p_run.add_argument(
+        "--max-cycles",
+        dest="max_cycles",
+        type=int,
+        default=None,
+        help="stop after this many scan cycles (default: run until interrupted)",
+    )
+    p_run.set_defaults(func=_cmd_run)
 
     p_login = with_config("login", "log in once and save a browser session")
     p_login.add_argument("marketplace", nargs="?", default="facebook", help="marketplace to log in")
@@ -208,11 +278,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_list.set_defaults(func=_cmd_list_seen)
 
     return parser
-
-
-def _cmd_stub(args: argparse.Namespace) -> int:
-    log.error("'%s' is not implemented yet (planned for Phase 2).", args.command)
-    return 2
 
 
 def main(argv: Sequence[str] | None = None) -> int:

@@ -13,6 +13,28 @@ from .prompt import SYSTEM, Verdict, build_user_prompt
 
 log = get_logger("ai.claude")
 
+# Per-1M-token (input, output) USD prices for usage/cost logging. Estimates only;
+# unknown models fall back to logging raw token counts without a dollar figure.
+_PRICE_PER_MTOK: dict[str, tuple[float, float]] = {
+    "claude-haiku-4-5": (1.0, 5.0),
+    "claude-sonnet-4-6": (3.0, 15.0),
+    "claude-opus-4-8": (5.0, 25.0),
+}
+
+
+def _log_usage(model: str, usage: object) -> None:
+    """Log token usage (and an estimated cost when the model's price is known)."""
+    in_tok = getattr(usage, "input_tokens", None)
+    out_tok = getattr(usage, "output_tokens", None)
+    if in_tok is None and out_tok is None:
+        return
+    price = _PRICE_PER_MTOK.get(model)
+    if price is not None and in_tok is not None and out_tok is not None:
+        cost = in_tok / 1e6 * price[0] + out_tok / 1e6 * price[1]
+        log.info("eval usage: in=%s out=%s est_cost=$%.5f (%s)", in_tok, out_tok, cost, model)
+    else:
+        log.info("eval usage: in=%s out=%s (%s)", in_tok, out_tok, model)
+
 
 class ClaudeEvaluator:
     """Evaluates listings via the Claude Messages API with structured output.
@@ -46,6 +68,10 @@ class ClaudeEvaluator:
             )
         except Exception as exc:  # noqa: BLE001 - wrap any SDK/transport failure
             raise EvalError(f"Claude evaluation failed for listing {listing.id!r}: {exc}") from exc
+
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            _log_usage(self._ai.model, usage)
 
         verdict: Verdict | None = response.parsed_output
         if verdict is None:

@@ -20,3 +20,6 @@ dist/
 .mypy_cache/
 .ruff_cache/
 .pytest_cache/
+
+# local notes (not tracked)
+HANDOFF.md

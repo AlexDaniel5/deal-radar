@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from .ai.base import Evaluator
-from .config.schema import AIConfig, ItemConfig
+from .config.schema import AIConfig, AppConfig, ItemConfig, MarketplaceConfig
 from .dedup.base import SeenStore
 from .logging import get_logger
 from .marketplaces.base import Marketplace, SearchContext
@@ -31,13 +31,17 @@ class ScanStats:
 
 
 def passes_keyword_filters(listing: Listing, item: ItemConfig) -> bool:
-    """Apply include/exclude keyword rules against the listing title + description."""
+    """Hard-filter a listing on exclude_keywords only.
+
+    ``include_keywords`` are deliberately NOT a hard AND filter: a marketplace
+    card's text is sparse (component details like 'carbon' or 'rtx' live on the
+    item's detail page, not the card), so requiring all/any of them here rejected
+    genuine matches. Includes are now a soft signal — the AI evaluator judges the
+    real 'match' from the item description; only obvious junk (exclude_keywords)
+    and out-of-range prices are filtered cheaply up front.
+    """
     haystack = f"{listing.title}\n{listing.description}".lower()
-    if any(kw.lower() in haystack for kw in item.exclude_keywords):
-        return False
-    if item.include_keywords:
-        return any(kw.lower() in haystack for kw in item.include_keywords)
-    return True
+    return not any(kw.lower() in haystack for kw in item.exclude_keywords)
 
 
 def within_price(listing: Listing, item: ItemConfig) -> bool:
@@ -111,3 +115,54 @@ def scan_item(
                 log.warning("notify via %s failed: %s", notifier.type, exc)
 
     return stats
+
+
+def scan_all(
+    *,
+    cfg: AppConfig,
+    items: Sequence[ItemConfig],
+    make_marketplace: Callable[[str, MarketplaceConfig], Marketplace],
+    evaluator: Evaluator,
+    store: SeenStore,
+    notifiers: Sequence[Notifier],
+    max_evaluations: int | None = None,
+    dry_run: bool = False,
+    on_stats: Callable[[ScanStats], None] | None = None,
+) -> list[ScanStats]:
+    """Run one full pass over every selected item on each enabled marketplace.
+
+    A fresh marketplace adapter is built (and its browser opened) per pass via
+    ``make_marketplace`` so long-running loops don't hold a browser session open
+    for hours. ``on_stats`` is called with each item's :class:`ScanStats` as it
+    completes (e.g. to print progress).
+    """
+    needed = {
+        m
+        for item in items
+        for m in item.marketplaces
+        if m in cfg.marketplaces and cfg.marketplaces[m].enabled
+    }
+    results: list[ScanStats] = []
+    for mname in sorted(needed):
+        mk_cfg = cfg.marketplaces[mname]
+        marketplace = make_marketplace(mname, mk_cfg)
+        with marketplace:
+            ctx = SearchContext(config=mk_cfg, dry_run=dry_run)
+            for item in items:
+                if mname not in item.marketplaces:
+                    continue
+                stats = scan_item(
+                    item=item,
+                    marketplace=marketplace,
+                    ctx=ctx,
+                    evaluator=evaluator,
+                    store=store,
+                    notifiers=notifiers,
+                    ai=cfg.ai,
+                    max_evaluations=max_evaluations,
+                    dry_run=dry_run,
+                )
+                results.append(stats)
+                if on_stats is not None:
+                    on_stats(stats)
+    return results
