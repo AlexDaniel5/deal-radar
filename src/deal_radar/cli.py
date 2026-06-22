@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Callable, Sequence
+import signal
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
+from types import FrameType
 from typing import TYPE_CHECKING
 
 from . import __version__, paths
@@ -19,6 +22,33 @@ if TYPE_CHECKING:
 log = get_logger("cli")
 
 
+@contextmanager
+def _graceful_sigint() -> Iterator[None]:
+    """Make Ctrl-C shut a Playwright run down cleanly.
+
+    The first SIGINT raises KeyboardInterrupt (breaking the loop); any further
+    SIGINTs while we tear down the browser/DB are ignored, so a mashed Ctrl-C
+    can't interrupt Playwright mid-close into a noisy async traceback.
+    """
+    state = {"stopping": False}
+
+    def handler(signum: int, frame: FrameType | None) -> None:
+        if state["stopping"]:
+            return  # already shutting down; let teardown finish
+        state["stopping"] = True
+        raise KeyboardInterrupt
+
+    try:
+        previous = signal.signal(signal.SIGINT, handler)
+    except ValueError:  # not in the main thread; can't install a handler
+        yield
+        return
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+
 def _print_stats(stats: ScanStats) -> None:
     print(
         f"  {stats.item}: found={stats.found} new_seen_skipped={stats.skipped_seen} "
@@ -27,11 +57,28 @@ def _print_stats(stats: ScanStats) -> None:
     )
 
 
-def _select_items(cfg: AppConfig, only: str | None) -> list[ItemConfig]:
-    items = [i for i in cfg.items if i.enabled and (only is None or i.name == only)]
-    if only is not None and not items:
-        raise ConfigError(f"no enabled item named {only!r}")
-    return items
+def _select_items(cfg: AppConfig, patterns: Sequence[str] | None) -> list[ItemConfig]:
+    """Pick enabled items by case-insensitive name substring (e.g. 'pc', 'bike').
+
+    No patterns -> all enabled items. Each pattern must match at least one enabled
+    item, so a typo is reported rather than silently scanning nothing.
+    """
+    enabled = [i for i in cfg.items if i.enabled]
+    if not patterns:
+        return enabled
+
+    selected: list[ItemConfig] = []
+    chosen: set[str] = set()
+    for pattern in patterns:
+        matches = [i for i in enabled if pattern.lower() in i.name.lower()]
+        if not matches:
+            available = ", ".join(i.name for i in enabled) or "(none)"
+            raise ConfigError(f"no enabled item matches {pattern!r}; available: {available}")
+        for item in matches:
+            if item.name not in chosen:
+                chosen.add(item.name)
+                selected.append(item)
+    return selected
 
 
 def _marketplace_factory(
@@ -63,7 +110,9 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     )
     if cfg.marketplaces:
         mks = ", ".join(
-            f"{name}{'' if mk.enabled else ' (disabled)'}" for name, mk in cfg.marketplaces.items()
+            f"{name}{'' if mk.enabled else ' (disabled)'}"
+            f"{'' if mk.fetch_details else ' [no detail fetch]'}"
+            for name, mk in cfg.marketplaces.items()
         )
     else:
         mks = "(none)"
@@ -96,7 +145,7 @@ def _cmd_run_once(args: argparse.Namespace) -> int:
     make_marketplace = _marketplace_factory(cfg, headless=not args.headful, max_results=args.limit)
 
     print(f"run-once: {len(items)} item(s), dry_run={args.dry_run}")
-    with SqliteSeenStore(paths.db_path()) as store:
+    with _graceful_sigint(), SqliteSeenStore(paths.db_path()) as store:
         results = scan_all(
             cfg=cfg,
             items=items,
@@ -134,7 +183,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         f"run: {len(items)} item(s) every ~{sched.poll_interval_seconds}s "
         f"(+/-{sched.jitter_seconds}s jitter), dry_run={args.dry_run}. Ctrl-C to stop."
     )
-    with SqliteSeenStore(paths.db_path()) as store:
+    with _graceful_sigint(), SqliteSeenStore(paths.db_path()) as store:
 
         def scan() -> None:
             scan_all(
@@ -222,7 +271,14 @@ def build_parser() -> argparse.ArgumentParser:
     with_config("validate-config", "validate the config and exit").set_defaults(func=_cmd_validate)
 
     p_run_once = with_config("run-once", "run a single scan of all items")
-    p_run_once.add_argument("--item", default=None, help="only scan the item with this name")
+    p_run_once.add_argument(
+        "--item",
+        action="append",
+        default=None,
+        metavar="SUBSTR",
+        help="only scan items whose name contains this (case-insensitive); "
+        "repeatable, e.g. --item pc --item bike. Omit to scan all.",
+    )
     p_run_once.add_argument(
         "--limit", type=int, default=40, help="max listings to collect per marketplace (default 40)"
     )
@@ -242,7 +298,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_run_once.set_defaults(func=_cmd_run_once)
 
     p_run = with_config("run", "run the polling loop (interval + jitter + rate limiting)")
-    p_run.add_argument("--item", default=None, help="only scan the item with this name")
+    p_run.add_argument(
+        "--item",
+        action="append",
+        default=None,
+        metavar="SUBSTR",
+        help="only scan items whose name contains this (case-insensitive); "
+        "repeatable, e.g. --item pc --item bike. Omit to scan all.",
+    )
     p_run.add_argument(
         "--limit", type=int, default=40, help="max listings to collect per marketplace (default 40)"
     )

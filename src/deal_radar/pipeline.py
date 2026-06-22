@@ -84,6 +84,15 @@ def scan_item(
             log.info("reached max_evaluations=%d for %s; stopping", max_evaluations, item.name)
             break
 
+        if ctx.config.fetch_details:
+            # Enrich with the full detail-page body so the AI judges on real specs,
+            # not the sparse card. Richer text may also reveal an exclusion the card hid.
+            listing = marketplace.fetch_details(listing)
+            if not passes_keyword_filters(listing, item):
+                stats.skipped_filter += 1
+                store.mark_seen(item.name, listing)
+                continue
+
         try:
             evaluation = evaluator.evaluate(item, listing)
         except Exception as exc:  # noqa: BLE001 - one bad listing shouldn't kill the scan

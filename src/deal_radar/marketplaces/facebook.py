@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import re
 import urllib.parse
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,20 @@ log = get_logger("marketplace.facebook")
 _ITEM_ID_RE = re.compile(r"/marketplace/item/(\d+)")
 _PRICE_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
 _ITEM_ANCHOR = 'a[href*="/marketplace/item/"]'
+# Detail-page description containers, most specific first. The DOM is not
+# contractual; tune these against live `detail id=...` DEBUG output if FB shifts.
+_DETAIL_TEXT_SELECTORS = (
+    '[data-testid="marketplace_pdp_description"]',
+    'div[role="main"] div[data-testid="info_section"]',
+)
+# When the targeted selectors miss (FB reshuffles its obfuscated DOM often), fall
+# back to the whole main content region: noisy, but it contains the real specs.
+_DETAIL_MAIN_SELECTOR = 'div[role="main"]'
+_DETAIL_MIN_USEFUL = 300  # chars below which we treat a targeted match as a stub
+_DETAIL_MAX_CHARS = 2500  # cap the main-region fallback (keeps token cost sane)
+# Stable English markers that begin the seller/ad section after the description;
+# everything from the earliest match is page chrome, not the listing.
+_DETAIL_TRAILING_MARKERS = ("Seller information", "Seller details")
 # Status badges Facebook prepends to a card's text; never a real title.
 _BADGE_RE = re.compile(r"^(just listed|new)$", re.IGNORECASE)
 
@@ -40,6 +55,74 @@ def _detect_currency(text: str) -> str:
     if "CA$" in text or "C$" in text:
         return "CAD"
     return "USD"
+
+
+def _pick_detail_text(candidates: Sequence[str]) -> str:
+    """Choose the richest detail-page text: the longest non-empty candidate."""
+    cleaned = [c.strip() for c in candidates if c and c.strip()]
+    return max(cleaned, key=len) if cleaned else ""
+
+
+def _safe_attr(page: Any, selector: str, name: str) -> str:
+    try:
+        return page.get_attribute(selector, name) or ""
+    except Exception:  # noqa: BLE001 - element/attribute may be absent
+        return ""
+
+
+def _safe_inner_text(page: Any, selector: str) -> str:
+    try:
+        element = page.query_selector(selector)
+        return element.inner_text().strip() if element is not None else ""
+    except Exception:  # noqa: BLE001 - selector may not match this page
+        return ""
+
+
+def _trim_main_text(text: str) -> str:
+    """Drop the seller/ad chrome that follows the description in the main region."""
+    low = text.lower()
+    cut = len(text)
+    for marker in _DETAIL_TRAILING_MARKERS:
+        found = low.find(marker.lower())
+        if found != -1:
+            cut = min(cut, found)
+    return text[:cut].strip()
+
+
+def _expand_description(page: Any) -> None:
+    """Best-effort: click a 'See more' toggle so the full description renders."""
+    try:
+        page.get_by_text("See more", exact=False).first.click(timeout=2000)
+    except Exception:  # noqa: BLE001 - no toggle / not clickable is fine
+        pass
+
+
+def _extract_detail_text(page: Any) -> str:
+    """Pull the listing description from a detail page (best-effort, may be empty).
+
+    Prefers a targeted description container; falls back to the whole main content
+    region (noisy but contains the specs) when the selectors miss — which they will
+    whenever Facebook reshuffles its obfuscated DOM. Tune ``_DETAIL_TEXT_SELECTORS``
+    against the ``detail id=... text[...]`` DEBUG output from a live run.
+    """
+    candidates: list[str] = []
+    og = _safe_attr(page, 'meta[property="og:description"]', "content")
+    if og:
+        candidates.append(og)
+    for selector in _DETAIL_TEXT_SELECTORS:
+        text = _safe_inner_text(page, selector)
+        if text:
+            candidates.append(text)
+
+    best = _pick_detail_text(candidates)
+    if len(best) >= _DETAIL_MIN_USEFUL:
+        return best  # a targeted container matched cleanly; use it as-is
+
+    # Targeted selectors missed (or gave only a stub) — fall back to the main region.
+    main = _safe_inner_text(page, _DETAIL_MAIN_SELECTOR)
+    if main:
+        candidates.append(_trim_main_text(main)[:_DETAIL_MAX_CHARS])
+    return _pick_detail_text(candidates)
 
 
 def _extract_item_id(href: str) -> str | None:
@@ -255,6 +338,32 @@ class FacebookMarketplace:
                 location=location,
                 description=text.strip(),
             )
+
+    def fetch_details(self, listing: Listing) -> Listing:
+        if self._context is None:  # not in a `with` block; nothing we can do
+            return listing
+        page = self._context.new_page()
+        page.set_default_timeout(self._page_timeout_ms)
+        try:
+            self._pause.wait()
+            page.goto(listing.url, wait_until="domcontentloaded")
+            try:  # let the SPA render the description; FB rarely goes fully idle
+                page.wait_for_load_state("networkidle", timeout=5000)
+            except Exception:  # noqa: BLE001 - extract whatever rendered anyway
+                pass
+            _expand_description(page)
+            text = _extract_detail_text(page)
+        except Exception as exc:  # noqa: BLE001 - best-effort enrichment, keep the card text
+            log.warning("detail fetch failed for %s: %s", listing.id, exc)
+            return listing
+        finally:
+            page.close()
+        # Only replace when the detail page genuinely adds text over the card.
+        if len(text) <= len(listing.description):
+            log.debug("detail id=%s no richer text (len=%d)", listing.id, len(text))
+            return listing
+        log.debug("detail id=%s text[%d]=%r", listing.id, len(text), text[:300])
+        return replace(listing, description=text)
 
 
 def capture_session(

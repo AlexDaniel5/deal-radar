@@ -34,6 +34,10 @@ class MarketplaceConfig(BaseModel):
     session_path: str | None = None
     default_location: str | None = None
     default_radius_km: int | None = Field(None, ge=1)
+    fetch_details: bool = Field(
+        True,
+        description="Open each candidate's detail page for full text before AI evaluation.",
+    )
 
 
 class ScheduleConfig(BaseModel):

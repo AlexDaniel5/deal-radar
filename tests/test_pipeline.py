@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from dataclasses import replace
 from typing import Any
 
 from deal_radar.config.schema import AIConfig, AppConfig, ItemConfig, MarketplaceConfig
@@ -16,8 +17,10 @@ AI = AIConfig(min_rating=4)
 class FakeMarket:
     name = "fake"
 
-    def __init__(self, listings: list[Listing]) -> None:
+    def __init__(self, listings: list[Listing], *, detail: dict[str, str] | None = None) -> None:
         self._listings = listings
+        self._detail = detail or {}
+        self.detail_calls: list[str] = []
 
     def __enter__(self) -> FakeMarket:
         return self
@@ -27,6 +30,13 @@ class FakeMarket:
 
     def search(self, item: ItemConfig, ctx: SearchContext) -> Iterator[Listing]:
         yield from self._listings
+
+    def fetch_details(self, listing: Listing) -> Listing:
+        self.detail_calls.append(listing.id)
+        text = self._detail.get(listing.id)
+        if text is None:
+            return listing
+        return replace(listing, description=text)
 
 
 class FakeStore:
@@ -295,3 +305,70 @@ def test_scan_all_skips_disabled_marketplace() -> None:
     )
     assert results == []
     assert calls["n"] == 0  # never built the disabled marketplace
+
+
+class _CapturingEval:
+    """Records the listing it was asked to evaluate."""
+
+    def __init__(self, verdict: Evaluation) -> None:
+        self.verdict = verdict
+        self.seen: list[Listing] = []
+
+    def evaluate(self, item: ItemConfig, listing: Listing) -> Evaluation:
+        self.seen.append(listing)
+        return self.verdict
+
+
+def test_fetch_details_enriches_description_before_eval() -> None:
+    market = FakeMarket(
+        [_listing("1", title="Gaming PC")],
+        detail={"1": "Intel i9-12900K, RTX 3070, 32GB DDR5, 850W PSU"},
+    )
+    ev = _CapturingEval(_good())
+    scan_item(
+        item=_item(),
+        marketplace=market,
+        ctx=_ctx(),
+        evaluator=ev,
+        store=FakeStore(),
+        notifiers=[FakeNotifier()],
+        ai=AI,
+    )
+    assert market.detail_calls == ["1"]
+    assert "RTX 3070" in ev.seen[0].description  # AI judged the full body, not the card
+
+
+def test_detail_text_can_reveal_an_exclusion() -> None:
+    # Card text is clean; the exclusion only appears in the detail-page body.
+    market = FakeMarket([_listing("1", title="Gaming PC")], detail={"1": "Selling for parts only"})
+    ev = FakeEval({})
+    store = FakeStore()
+    stats = scan_item(
+        item=_item(exclude_keywords=["for parts"]),
+        marketplace=market,
+        ctx=_ctx(),
+        evaluator=ev,
+        store=store,
+        notifiers=[],
+        ai=AI,
+    )
+    assert stats.skipped_filter == 1
+    assert ev.calls == []  # excluded after enrichment, before spending an AI eval
+    assert store.is_seen("PC", "1")
+
+
+def test_fetch_details_disabled_skips_enrichment() -> None:
+    market = FakeMarket([_listing("1")], detail={"1": "should not be used"})
+    ev = _CapturingEval(_good())
+    ctx = SearchContext(config=MarketplaceConfig(fetch_details=False))
+    scan_item(
+        item=_item(),
+        marketplace=market,
+        ctx=ctx,
+        evaluator=ev,
+        store=FakeStore(),
+        notifiers=[FakeNotifier()],
+        ai=AI,
+    )
+    assert market.detail_calls == []
+    assert ev.seen[0].description == ""  # card text, not the detail body

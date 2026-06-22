@@ -3,6 +3,8 @@
 .env.*
 !.env.example
 config.yaml
+config.*.yaml
+!config.example.yaml
 
 # runtime data (seen store, persisted browser sessions)
 data/

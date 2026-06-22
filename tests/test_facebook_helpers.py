@@ -4,10 +4,14 @@ from __future__ import annotations
 
 from deal_radar.config.schema import ItemConfig, MarketplaceConfig
 from deal_radar.marketplaces.facebook import (
+    _DETAIL_MAIN_SELECTOR,
+    _DETAIL_TEXT_SELECTORS,
     _detect_currency,
+    _extract_detail_text,
     _extract_item_id,
     _parse_card_text,
     _parse_price,
+    _pick_detail_text,
     build_search_url,
 )
 
@@ -79,6 +83,82 @@ def test_parse_card_text_bike() -> None:
 def test_detect_currency() -> None:
     assert _detect_currency("Just listed\nCA$650\nBike\nToronto, ON") == "CAD"
     assert _detect_currency("$650\nBike\nToronto, ON") == "USD"
+
+
+def test_pick_detail_text_prefers_longest() -> None:
+    body = "the longest candidate body"
+    assert _pick_detail_text(["short", body]) == body
+
+
+def test_pick_detail_text_ignores_blank() -> None:
+    assert _pick_detail_text(["", "   ", "real text"]) == "real text"
+
+
+def test_pick_detail_text_empty() -> None:
+    assert _pick_detail_text([]) == ""
+
+
+class _FakeEl:
+    def __init__(self, text: str) -> None:
+        self._text = text
+
+    def inner_text(self) -> str:
+        return self._text
+
+
+class _FakePage:
+    """Minimal Playwright-page stand-in for _extract_detail_text."""
+
+    def __init__(self, *, og: str = "", elements: dict[str, str] | None = None) -> None:
+        self._og = og
+        self._elements = elements or {}
+
+    def get_attribute(self, selector: str, name: str) -> str | None:
+        return self._og or None
+
+    def query_selector(self, selector: str) -> _FakeEl | None:
+        text = self._elements.get(selector)
+        return _FakeEl(text) if text is not None else None
+
+
+def test_extract_detail_prefers_substantial_targeted_match() -> None:
+    body = "RAM: 64GB DDR5. " * 30  # well over the min-useful threshold
+    page = _FakePage(elements={_DETAIL_TEXT_SELECTORS[0]: body})
+    assert _extract_detail_text(page) == body.strip()
+
+
+def test_extract_detail_falls_back_to_main_region() -> None:
+    # Targeted selectors miss and og is empty -> use the noisy main region.
+    main_text = "Condition Used\nRAM: 64GB DDR5\nGPU: 3080 Ti"
+    page = _FakePage(elements={_DETAIL_MAIN_SELECTOR: main_text})
+    assert "64GB DDR5" in _extract_detail_text(page)
+
+
+def test_extract_detail_short_og_still_falls_back_to_main() -> None:
+    # A short og blurb is a stub; the richer main region should win.
+    page = _FakePage(og="Gaming PC", elements={_DETAIL_MAIN_SELECTOR: "x" * 1000})
+    assert len(_extract_detail_text(page)) == 1000
+
+
+def test_extract_detail_caps_main_region() -> None:
+    page = _FakePage(elements={_DETAIL_MAIN_SELECTOR: "y" * 9000})
+    assert len(_extract_detail_text(page)) == 2500
+
+
+def test_extract_detail_empty_when_nothing_matches() -> None:
+    assert _extract_detail_text(_FakePage()) == ""
+
+
+def test_extract_detail_drops_seller_chrome() -> None:
+    # A real captured body: description, then the seller/ad section we want gone.
+    main_text = (
+        "Gaming PC RTX 2070\nCA$500\nDetails\nCondition\nNew\nPrice is firm\n"
+        "Seller information\nSeller details\nTrevor Jordan\n(146)\n"
+        "Highly rated on Marketplace\nAd\nHomes By John Bruce Robinson"
+    )
+    result = _extract_detail_text(_FakePage(elements={_DETAIL_MAIN_SELECTOR: main_text}))
+    assert "Price is firm" in result
+    assert "Seller" not in result and "Trevor Jordan" not in result
 
 
 def test_build_search_url() -> None:
