@@ -24,18 +24,22 @@ log = get_logger("cli")
 
 @contextmanager
 def _graceful_sigint() -> Iterator[None]:
-    """Make Ctrl-C shut a Playwright run down cleanly.
+    """Make Ctrl-C shut a Playwright run down cleanly, but always killable.
 
-    The first SIGINT raises KeyboardInterrupt (breaking the loop); any further
-    SIGINTs while we tear down the browser/DB are ignored, so a mashed Ctrl-C
-    can't interrupt Playwright mid-close into a noisy async traceback.
+    First Ctrl-C raises KeyboardInterrupt to break the loop (clean teardown).
+    A second Ctrl-C restores Python's default handler and force-quits, so the
+    process can never get stuck if the first interrupt is swallowed mid-call or
+    browser teardown hangs.
     """
-    state = {"stopping": False}
+    state = {"count": 0}
 
     def handler(signum: int, frame: FrameType | None) -> None:
-        if state["stopping"]:
-            return  # already shutting down; let teardown finish
-        state["stopping"] = True
+        state["count"] += 1
+        if state["count"] == 1:
+            print("\nstopping… (press Ctrl-C again to force quit)", flush=True)
+            raise KeyboardInterrupt
+        # Second+ press: hand back to the default handler and force the interrupt.
+        signal.signal(signal.SIGINT, signal.default_int_handler)
         raise KeyboardInterrupt
 
     try:
