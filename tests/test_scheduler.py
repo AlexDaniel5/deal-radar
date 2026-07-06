@@ -83,6 +83,36 @@ def test_run_loop_backs_off_on_failure_then_recovers() -> None:
     assert sleeps == [30.0, 60.0]
 
 
+def test_run_loop_should_stop_before_first_cycle() -> None:
+    calls: list[int] = []
+    cycles = run_loop(
+        scan=lambda: calls.append(1),
+        schedule=_sched(),
+        sleep=lambda _d: None,
+        rng=random.Random(0),
+        should_stop=lambda: True,  # stop immediately
+    )
+    assert cycles == 0
+    assert calls == []
+
+
+def test_run_loop_should_stop_after_one_cycle() -> None:
+    calls: list[int] = []
+
+    def stop() -> bool:
+        return len(calls) >= 1  # stop once the first scan has run
+
+    cycles = run_loop(
+        scan=lambda: calls.append(1),
+        schedule=_sched(jitter_seconds=0),
+        sleep=lambda _d: None,
+        rng=random.Random(0),
+        should_stop=stop,
+    )
+    assert cycles == 1
+    assert len(calls) == 1
+
+
 def test_run_loop_backoff_caps() -> None:
     sleeps: list[float] = []
 

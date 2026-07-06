@@ -372,3 +372,41 @@ def test_fetch_details_disabled_skips_enrichment() -> None:
     )
     assert market.detail_calls == []
     assert ev.seen[0].description == ""  # card text, not the detail body
+
+
+def test_scan_item_should_stop_halts_before_first_listing() -> None:
+    ev = FakeEval({})
+    stats = scan_item(
+        item=_item(),
+        marketplace=FakeMarket([_listing("1"), _listing("2")]),
+        ctx=_ctx(),
+        evaluator=ev,
+        store=FakeStore(),
+        notifiers=[],
+        ai=AI,
+        should_stop=lambda: True,
+    )
+    assert stats.found == 0  # bailed before consuming any listing
+    assert ev.calls == []
+
+
+def test_scan_all_should_stop_skips_items() -> None:
+    item = _item()
+    cfg = _app_config([item])
+    calls = {"n": 0}
+
+    def make(name: str, mk_cfg: MarketplaceConfig) -> FakeMarket:
+        calls["n"] += 1
+        return FakeMarket([_listing("1")])
+
+    results = scan_all(
+        cfg=cfg,
+        items=[item],
+        make_marketplace=make,
+        evaluator=FakeEval({}),
+        store=FakeStore(),
+        notifiers=[],
+        should_stop=lambda: True,
+    )
+    assert results == []
+    assert calls["n"] == 0  # stopped before building any marketplace

@@ -20,7 +20,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.5", "mypy>=1.10", "types-PyYAML"]
+web = ["fastapi>=0.110", "uvicorn[standard]>=0.29"]
+dev = ["pytest>=8", "ruff>=0.5", "mypy>=1.10", "types-PyYAML", "fastapi>=0.110", "uvicorn[standard]>=0.29"]
 
 [project.scripts]
 deal-radar = "deal_radar.cli:main"
@@ -35,6 +36,10 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# app.py embeds the web UI's HTML/CSS/JS as a string literal with long lines.
+"src/deal_radar/web/app.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.11"

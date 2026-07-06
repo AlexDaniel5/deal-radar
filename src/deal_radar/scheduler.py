@@ -35,18 +35,26 @@ def run_loop(
     backoff_max_seconds: float = 900.0,
     sleep: Callable[[float], None] = time.sleep,
     rng: random.Random | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> int:
     """Run ``scan`` repeatedly until interrupted (or ``max_cycles`` is reached).
 
     Between successful cycles it sleeps ``poll_interval +/- jitter``. If a whole
     cycle raises, it logs and backs off with exponential delay (capped), resetting
     the backoff once a cycle succeeds again. Returns the number of cycles run.
+
+    ``should_stop`` is polled before each cycle and before each sleep so a caller
+    (e.g. the web UI) can stop the loop cooperatively; pair it with a stop-aware
+    ``sleep`` (such as ``threading.Event.wait``) to break out of the wait promptly.
     """
     rng = rng if rng is not None else random.Random()
     cycle = 0
     consecutive_failures = 0
 
     while max_cycles is None or cycle < max_cycles:
+        if should_stop is not None and should_stop():
+            log.info("stop requested; exiting loop before cycle %d", cycle + 1)
+            break
         cycle += 1
         log.info("scan cycle %d starting", cycle)
         try:
@@ -69,6 +77,8 @@ def run_loop(
             delay = next_delay(schedule, rng)
             log.info("scan cycle %d done; next in %.0fs", cycle, delay)
 
+        if should_stop is not None and should_stop():
+            break
         if max_cycles is not None and cycle >= max_cycles:
             break
         sleep(delay)

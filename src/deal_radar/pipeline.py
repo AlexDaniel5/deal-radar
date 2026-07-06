@@ -66,12 +66,16 @@ def scan_item(
     ai: AIConfig,
     max_evaluations: int | None = None,
     dry_run: bool = False,
+    should_stop: Callable[[], bool] | None = None,
 ) -> ScanStats:
     """Scan one item on one marketplace and notify on good new matches."""
     stats = ScanStats(item=item.name)
     threshold = item.effective_min_rating(ai)
 
     for listing in marketplace.search(item, ctx):
+        if should_stop is not None and should_stop():
+            log.info("stop requested; halting scan of %s", item.name)
+            break
         stats.found += 1
         if store.is_seen(item.name, listing.id):
             stats.skipped_seen += 1
@@ -137,13 +141,15 @@ def scan_all(
     max_evaluations: int | None = None,
     dry_run: bool = False,
     on_stats: Callable[[ScanStats], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> list[ScanStats]:
     """Run one full pass over every selected item on each enabled marketplace.
 
     A fresh marketplace adapter is built (and its browser opened) per pass via
     ``make_marketplace`` so long-running loops don't hold a browser session open
     for hours. ``on_stats`` is called with each item's :class:`ScanStats` as it
-    completes (e.g. to print progress).
+    completes (e.g. to print progress). ``should_stop`` is polled between items
+    (and forwarded to each item scan) for cooperative cancellation.
     """
     needed = {
         m
@@ -153,11 +159,15 @@ def scan_all(
     }
     results: list[ScanStats] = []
     for mname in sorted(needed):
+        if should_stop is not None and should_stop():
+            break
         mk_cfg = cfg.marketplaces[mname]
         marketplace = make_marketplace(mname, mk_cfg)
         with marketplace:
             ctx = SearchContext(config=mk_cfg, dry_run=dry_run)
             for item in items:
+                if should_stop is not None and should_stop():
+                    break
                 if mname not in item.marketplaces:
                     continue
                 stats = scan_item(
@@ -170,6 +180,7 @@ def scan_all(
                     ai=cfg.ai,
                     max_evaluations=max_evaluations,
                     dry_run=dry_run,
+                    should_stop=should_stop,
                 )
                 results.append(stats)
                 if on_stats is not None:
