@@ -207,6 +207,23 @@ def _cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_serve(args: argparse.Namespace) -> int:
+    try:
+        import uvicorn
+
+        from .web.app import create_app
+    except ImportError as exc:
+        raise DealRadarError(
+            "web UI needs extra deps; install them with: pip install -e '.[web]'"
+        ) from exc
+
+    load_config(args.config)  # fail fast on a broken config before starting the server
+    app = create_app(config_path=args.config)
+    print(f"deal-radar web UI at http://{args.host}:{args.port}  (config: {args.config})")
+    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+    return 0
+
+
 def _cmd_login(args: argparse.Namespace) -> int:
     from .marketplaces.facebook import capture_session
 
@@ -334,6 +351,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="stop after this many scan cycles (default: run until interrupted)",
     )
     p_run.set_defaults(func=_cmd_run)
+
+    p_serve = with_config("serve", "run the local web UI (config editor, logs, scanner control)")
+    p_serve.add_argument("--host", default="127.0.0.1", help="bind address (default 127.0.0.1)")
+    p_serve.add_argument("--port", type=int, default=8000, help="port (default 8000)")
+    p_serve.set_defaults(func=_cmd_serve)
 
     p_login = with_config("login", "log in once and save a browser session")
     p_login.add_argument("marketplace", nargs="?", default="facebook", help="marketplace to log in")

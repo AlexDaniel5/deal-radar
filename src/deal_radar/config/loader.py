@@ -37,6 +37,23 @@ def _resolve_env(value: Any) -> Any:
     return value
 
 
+def _parse_and_validate(text: str, *, source: str, resolve_env: bool) -> AppConfig:
+    try:
+        raw = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise ConfigError(f"invalid YAML in {source}: {exc}") from exc
+    if raw is None:
+        raise ConfigError(f"config is empty: {source}")
+    if not isinstance(raw, dict):
+        raise ConfigError(f"config root must be a mapping, got {type(raw).__name__}")
+    if resolve_env:
+        raw = _resolve_env(raw)
+    try:
+        return AppConfig.model_validate(raw)
+    except ValidationError as exc:
+        raise ConfigError(f"config validation failed for {source}:\n{exc}") from exc
+
+
 def load_config(path: str | Path, *, resolve_env: bool = True) -> AppConfig:
     """Read a YAML config file and return a validated :class:`AppConfig`.
 
@@ -46,20 +63,18 @@ def load_config(path: str | Path, *, resolve_env: bool = True) -> AppConfig:
     p = Path(path)
     if not p.is_file():
         raise ConfigError(f"config file not found: {p}")
-    try:
-        raw = yaml.safe_load(p.read_text(encoding="utf-8"))
-    except yaml.YAMLError as exc:
-        raise ConfigError(f"invalid YAML in {p}: {exc}") from exc
-    if raw is None:
-        raise ConfigError(f"config file is empty: {p}")
-    if not isinstance(raw, dict):
-        raise ConfigError(f"config root must be a mapping, got {type(raw).__name__}")
-    if resolve_env:
-        raw = _resolve_env(raw)
-    try:
-        return AppConfig.model_validate(raw)
-    except ValidationError as exc:
-        raise ConfigError(f"config validation failed for {p}:\n{exc}") from exc
+    return _parse_and_validate(
+        p.read_text(encoding="utf-8"), source=str(p), resolve_env=resolve_env
+    )
+
+
+def validate_config_text(text: str, *, resolve_env: bool = True) -> AppConfig:
+    """Validate raw YAML config text (e.g. from the web editor) without touching disk.
+
+    Raises :class:`ConfigError` on malformed YAML, unresolved ``${ENV}``, or schema
+    failure. Returns the validated :class:`AppConfig` on success.
+    """
+    return _parse_and_validate(text, source="<submitted config>", resolve_env=resolve_env)
 
 
 def load_dotenv_if_present(path: str | Path = ".env") -> None:
