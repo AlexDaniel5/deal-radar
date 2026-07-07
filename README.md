@@ -60,7 +60,7 @@ equivalent. All commands take `--config PATH` (default `config.yaml`).
 | `login [marketplace]` | Open a browser for a one-time manual login; saves the session for later runs. Defaults to `facebook`. |
 | `run-once` | Run **one** full scan pass over your items, then exit. |
 | `run` | Run the **polling loop** — repeat `run-once`'s work on the configured interval (with jitter + rate limiting) until you press Ctrl-C. |
-| `serve` | Launch the **local web UI** (config editor, live logs, and Start/Stop/Scan-now controls). Needs the `[web]` extra. Binds `127.0.0.1:8000` by default (`--host`/`--port`). |
+| `serve` | Launch the **local web UI** (config editor, live logs, scanner start/stop). |
 | `list-seen` | Print listings already recorded in the local SQLite "seen" store (so you don't get re-notified). |
 
 ### Flags for `run-once` and `run`
@@ -108,30 +108,11 @@ deal-radar run-once --headful --max-evals 1 --log-level DEBUG
 
 ## Web UI
 
-A local control panel — edit your config, watch the scanner's logs live, and
-start/stop it, all from the browser:
+Run the local web server, then open http://127.0.0.1:8000:
 
 ```bash
-.venv/bin/pip install -e ".[web]"   # one-time: FastAPI + uvicorn (into the venv)
-.venv/bin/deal-radar serve          # then open http://127.0.0.1:8000
+.venv/bin/deal-radar serve
 ```
-
-> Commands are shown with the `.venv/bin/` prefix so they use the project's
-> virtualenv. Alternatively `source .venv/bin/activate` once, then drop the prefix.
-> (Bare `pip`/`deal-radar` hit the system Python, which errors on Debian/Ubuntu.)
-
-It gives you:
-- **Config editor** — your `config.yaml` in a textarea; **Validate & save** runs it
-  through the same schema check as `validate-config` and only writes on success
-  (a bad edit is rejected, not saved). Changes apply the next time the scanner starts.
-- **Recent listings** — what the scanner has matched/seen, with links.
-- **Live log** — the scanner's output (matches, eval costs, errors) streamed via SSE.
-- **Scanner control** — **Start loop**, **Scan now** (one pass), and **Stop**. The
-  scanner runs in a background thread inside the server; Stop is cooperative (it
-  halts between listings/cycles).
-
-Bound to `127.0.0.1` only (no auth — it's a personal local tool), and your API key
-never touches it (it stays in `.env`, referenced as `${ANTHROPIC_API_KEY}`).
 
 ## Cost & safety notes
 
