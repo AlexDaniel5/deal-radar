@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS seen (
     matched       INTEGER,
     title         TEXT,
     url           TEXT,
+    images_analyzed INTEGER,
     PRIMARY KEY (item_name, listing_id)
 );
 """
@@ -35,6 +36,10 @@ class SqliteSeenStore:
         self._conn = sqlite3.connect(str(self._path))
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(_SCHEMA)
+        # Migration: databases created before the column existed.
+        cols = {row[1] for row in self._conn.execute("PRAGMA table_info(seen)")}
+        if "images_analyzed" not in cols:
+            self._conn.execute("ALTER TABLE seen ADD COLUMN images_analyzed INTEGER")
         self._conn.commit()
 
     def close(self) -> None:
@@ -61,13 +66,14 @@ class SqliteSeenStore:
             """
             INSERT INTO seen
                 (item_name, listing_id, first_seen_ts, last_seen_ts,
-                 last_price, rating, matched, title, url)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 last_price, rating, matched, title, url, images_analyzed)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(item_name, listing_id) DO UPDATE SET
                 last_seen_ts = excluded.last_seen_ts,
                 last_price   = excluded.last_price,
                 rating       = COALESCE(excluded.rating, seen.rating),
-                matched      = COALESCE(excluded.matched, seen.matched)
+                matched      = COALESCE(excluded.matched, seen.matched),
+                images_analyzed = COALESCE(excluded.images_analyzed, seen.images_analyzed)
             """,
             (
                 item_name,
@@ -79,6 +85,7 @@ class SqliteSeenStore:
                 int(evaluation.match) if evaluation else None,
                 listing.title,
                 listing.url,
+                int(evaluation.images_analyzed) if evaluation else None,
             ),
         )
         self._conn.commit()
@@ -95,8 +102,8 @@ class SqliteSeenStore:
 
     def list_seen(self, item_name: str | None = None) -> list[dict[str, Any]]:
         sql = (
-            "SELECT item_name, listing_id, title, url, last_price, rating, matched, first_seen_ts "
-            "FROM seen"
+            "SELECT item_name, listing_id, title, url, last_price, rating, matched, "
+            "first_seen_ts, images_analyzed FROM seen"
         )
         params: tuple[Any, ...] = ()
         if item_name is not None:
@@ -112,5 +119,6 @@ class SqliteSeenStore:
             "rating",
             "matched",
             "first_seen_ts",
+            "images_analyzed",
         ]
         return [dict(zip(cols, row, strict=True)) for row in self._conn.execute(sql, params)]

@@ -44,6 +44,21 @@ def test_ntfy_publishes_json() -> None:
     assert "Gaming PC" in body["title"]
     assert "great deal" in body["message"]
     assert body["click"] == "https://x/1"
+    assert body["tags"] == ["moneybag"]
+
+
+def test_ntfy_adds_camera_tag_when_images_analyzed() -> None:
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["json"] = json.loads(request.content)
+        return httpx.Response(200)
+
+    event = _event()
+    event.evaluation.images_analyzed = True
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    NtfyNotifier(NtfyNotifierConfig(topic="t"), client=client).notify(event)
+    assert captured["json"]["tags"] == ["moneybag", "camera"]
 
 
 def test_ntfy_includes_priority_when_set() -> None:

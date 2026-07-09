@@ -28,6 +28,7 @@ class Evaluation:
     rating: int  # 1-5
     rationale: str
     model: str
+    images_analyzed: bool = False  # photos were attached to the AI call
 
 
 @dataclass(slots=True)

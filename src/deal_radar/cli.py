@@ -261,7 +261,8 @@ def _cmd_list_seen(args: argparse.Namespace) -> int:
     for row in rows[: args.limit]:
         price = f"{row['last_price']:.0f}" if row["last_price"] is not None else "?"
         rating = row["rating"] if row["rating"] is not None else "-"
-        print(f"  [{rating}/5] {price:>6}  {row['item_name']}: {row['title']}  {row['url']}")
+        cam = " 📷" if row.get("images_analyzed") else ""
+        print(f"  [{rating}/5]{cam} {price:>6}  {row['item_name']}: {row['title']}  {row['url']}")
     print(f"({len(rows)} total)")
     return 0
 

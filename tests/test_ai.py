@@ -69,6 +69,47 @@ def test_evaluate_wraps_sdk_error() -> None:
         evaluator.evaluate(_item(), _listing())
 
 
+def _photo_listing() -> Listing:
+    return Listing(
+        id="1",
+        marketplace="facebook",
+        title="RTX 3070 PC",
+        url="u",
+        price=600.0,
+        description="Mid tower build, all parts listed in photos",
+        image_urls=["https://cdn/img1.jpg", "https://cdn/img2.jpg"],
+    )
+
+
+def test_evaluate_attaches_all_photos_on_keyword() -> None:
+    client = _Client(parsed=Verdict(match=True, rating=4, rationale="good"))
+    evaluator = ClaudeEvaluator(AIConfig(analyze_images=True), client=client)
+    result = evaluator.evaluate(_item(), _photo_listing())
+    assert result.images_analyzed is True
+    content = client.messages.calls[0]["messages"][0]["content"]
+    assert isinstance(content, list)
+    images = [b for b in content if b["type"] == "image"]
+    assert [b["source"]["url"] for b in images] == ["https://cdn/img1.jpg", "https://cdn/img2.jpg"]
+    assert content[-1]["type"] == "text"
+    assert "RTX 3070 PC" in content[-1]["text"]
+
+
+def test_evaluate_text_only_without_photo_keyword() -> None:
+    client = _Client(parsed=Verdict(match=True, rating=4, rationale="good"))
+    evaluator = ClaudeEvaluator(AIConfig(analyze_images=True), client=client)
+    listing = _photo_listing()
+    listing.description = "Mid tower build, great condition"
+    evaluator.evaluate(_item(), listing)
+    assert isinstance(client.messages.calls[0]["messages"][0]["content"], str)
+
+
+def test_evaluate_text_only_when_images_disabled() -> None:
+    client = _Client(parsed=Verdict(match=True, rating=4, rationale="good"))
+    evaluator = ClaudeEvaluator(AIConfig(analyze_images=False), client=client)
+    evaluator.evaluate(_item(), _photo_listing())
+    assert isinstance(client.messages.calls[0]["messages"][0]["content"], str)
+
+
 def test_build_user_prompt_contains_fields() -> None:
     prompt = build_user_prompt(_item(), _listing())
     assert "RTX 3070 PC" in prompt

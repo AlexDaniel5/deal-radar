@@ -33,6 +33,18 @@ def test_mark_seen_with_evaluation_updates_rating(tmp_path: Path) -> None:
     assert rows[0]["rating"] == 5
     assert rows[0]["matched"] == 1
     assert rows[0]["last_price"] == 450.0
+    assert rows[0]["images_analyzed"] == 0
+
+
+def test_mark_seen_records_images_analyzed(tmp_path: Path) -> None:
+    with SqliteSeenStore(tmp_path / "s.db") as store:
+        store.mark_seen(
+            "Item",
+            _listing(),
+            Evaluation(match=True, rating=5, rationale="x", model="m", images_analyzed=True),
+        )
+        rows = store.list_seen("Item")
+    assert rows[0]["images_analyzed"] == 1
 
 
 def test_persists_across_connections(tmp_path: Path) -> None:

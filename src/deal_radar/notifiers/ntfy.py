@@ -44,7 +44,8 @@ class NtfyNotifier:
                 f"{evaluation.rationale}"
             ),
             "click": listing.url,
-            "tags": ["moneybag"],
+            # "camera" renders as a 📷 icon: the AI looked through the photos.
+            "tags": ["moneybag", "camera"] if evaluation.images_analyzed else ["moneybag"],
         }
         if self._config.priority is not None:
             payload["priority"] = self._config.priority

@@ -125,6 +125,29 @@ def _extract_detail_text(page: Any) -> str:
     return _pick_detail_text(candidates)
 
 
+def _extract_image_urls(page: Any) -> list[str]:
+    """Collect the listing's photo URLs from a detail page (best-effort).
+
+    Marketplace photos are served from the scontent CDN inside the main region;
+    seller avatars and UI chrome are skipped by rendered size. Order is kept
+    (cover photo first) and duplicates dropped. Tune against the
+    ``detail id=... images=...`` DEBUG output from a live run.
+    """
+    urls: list[str] = []
+    try:
+        for img in page.query_selector_all(f'{_DETAIL_MAIN_SELECTOR} img[src*="scontent"]'):
+            src = img.get_attribute("src") or ""
+            if not src or src in urls:
+                continue
+            box = img.bounding_box()
+            if box is not None and (box["width"] < 80 or box["height"] < 80):
+                continue  # avatar / sprite / map tile
+            urls.append(src)
+    except Exception:  # noqa: BLE001 - best-effort; a photo-less listing is fine
+        pass
+    return urls
+
+
 def _extract_item_id(href: str) -> str | None:
     match = _ITEM_ID_RE.search(href)
     return match.group(1) if match else None
@@ -353,17 +376,23 @@ class FacebookMarketplace:
                 pass
             _expand_description(page)
             text = _extract_detail_text(page)
+            images = _extract_image_urls(page)
         except Exception as exc:  # noqa: BLE001 - best-effort enrichment, keep the card text
             log.warning("detail fetch failed for %s: %s", listing.id, exc)
             return listing
         finally:
             page.close()
+        updates: dict[str, Any] = {}
+        if images:
+            log.debug("detail id=%s images=%d first=%r", listing.id, len(images), images[0][:120])
+            updates["image_urls"] = images
         # Only replace when the detail page genuinely adds text over the card.
-        if len(text) <= len(listing.description):
+        if len(text) > len(listing.description):
+            log.debug("detail id=%s text[%d]=%r", listing.id, len(text), text[:300])
+            updates["description"] = text
+        else:
             log.debug("detail id=%s no richer text (len=%d)", listing.id, len(text))
-            return listing
-        log.debug("detail id=%s text[%d]=%r", listing.id, len(text), text[:300])
-        return replace(listing, description=text)
+        return replace(listing, **updates) if updates else listing
 
 
 def capture_session(
