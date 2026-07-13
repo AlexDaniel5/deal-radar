@@ -23,6 +23,14 @@ schedule:
   jitter_seconds: 600
   per_request_min_interval_seconds: 25
 
+# Seller messaging (EXPERIMENTAL — read the README warning; default OFF).
+# When enabled, a match creates a *draft* message you review and approve in the
+# web UI before it is sent; nothing ever goes out automatically.
+messaging:
+  enabled: false
+  negotiate: false      # true => drafts open with an offer instead of asking price
+  offer_percent: 90     # offer = 90% of asking, rounded to the nearest $5, never above asking
+
 notifiers:
   - type: ntfy
     topic: your-ntfy-topic-here
@@ -60,6 +68,8 @@ items:
     location: "Toronto, ON"
     radius_km: 30
     min_rating: 5                # stricter for this item
+    # negotiate: true            # per-item overrides for the messaging block
+    # offer_percent: 85
     description: >
       A road bike with a 54-56cm frame, Shimano 105 or better groupset, carbon
       or quality aluminum frame, in good working condition. Not interested in

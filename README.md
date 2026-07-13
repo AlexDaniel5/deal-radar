@@ -114,6 +114,27 @@ Run the local web server, then open http://127.0.0.1:8000:
 .venv/bin/deal-radar serve
 ```
 
+## Messaging sellers (off by default)
+
+> **Warning.** Automated messaging can violate Facebook's Terms of Service and
+> may get your account restricted or banned. This feature is for low-volume
+> personal use only, and it never sends anything without your explicit approval.
+
+With `messaging.enabled: true` in the config, each match also produces a *draft*
+first message to the seller (written by Claude around a price you control). The
+draft appears in the web UI's **Message drafts** section, where you can edit the
+text, then **Approve & send** (a browser opens the listing with your saved
+session and sends it) or **Dismiss**. Guarantees:
+
+- Nothing is ever sent automatically — every message requires a click.
+- At most one message per listing, ever (enforced in the database).
+- With `negotiate: false` the draft just asks about availability at asking price.
+  With `negotiate: true` it includes an opening offer: `offer_percent` of the
+  asking price, rounded to the nearest $5, never above asking. Both settings can
+  be overridden per item.
+- Opening offer only — deal-radar never reads or replies to the seller's
+  response. Continue the conversation yourself in Messenger.
+
 ## Cost & safety notes
 
 - **Every AI evaluation costs money.** It's one Claude API call per *new* listing

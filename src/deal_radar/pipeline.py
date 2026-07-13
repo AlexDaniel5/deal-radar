@@ -10,6 +10,7 @@ from .config.schema import AIConfig, AppConfig, ItemConfig, MarketplaceConfig
 from .dedup.base import SeenStore
 from .logging import get_logger
 from .marketplaces.base import Marketplace, SearchContext
+from .messaging.drafter import Drafter
 from .models import Listing, NotificationEvent
 from .notifiers.base import Notifier
 
@@ -26,6 +27,7 @@ class ScanStats:
     skipped_filter: int = 0
     evaluated: int = 0
     matched: int = 0
+    drafted: int = 0
     notified: int = 0
     errors: int = 0
 
@@ -64,6 +66,7 @@ def scan_item(
     store: SeenStore,
     notifiers: Sequence[Notifier],
     ai: AIConfig,
+    drafter: Drafter | None = None,
     max_evaluations: int | None = None,
     dry_run: bool = False,
     should_stop: Callable[[], bool] | None = None,
@@ -118,7 +121,21 @@ def scan_item(
         )
         if dry_run:
             continue
-        event = NotificationEvent(item_name=item.name, listing=listing, evaluation=evaluation)
+        draft_pending = False
+        if drafter is not None:
+            try:
+                drafter.draft(item, listing, evaluation)
+                stats.drafted += 1
+                draft_pending = True
+            except Exception as exc:  # noqa: BLE001 - a failed draft shouldn't kill the scan
+                stats.errors += 1
+                log.warning("drafting a seller message for %s failed: %s", listing.id, exc)
+        event = NotificationEvent(
+            item_name=item.name,
+            listing=listing,
+            evaluation=evaluation,
+            draft_pending=draft_pending,
+        )
         for notifier in notifiers:
             try:
                 notifier.notify(event)
@@ -138,6 +155,7 @@ def scan_all(
     evaluator: Evaluator,
     store: SeenStore,
     notifiers: Sequence[Notifier],
+    drafter: Drafter | None = None,
     max_evaluations: int | None = None,
     dry_run: bool = False,
     on_stats: Callable[[ScanStats], None] | None = None,
@@ -178,6 +196,7 @@ def scan_all(
                     store=store,
                     notifiers=notifiers,
                     ai=cfg.ai,
+                    drafter=drafter,
                     max_evaluations=max_evaluations,
                     dry_run=dry_run,
                     should_stop=should_stop,

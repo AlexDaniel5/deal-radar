@@ -96,6 +96,43 @@ def test_unknown_field_rejected(tmp_path: Path) -> None:
         load_config(_write(tmp_path, data))
 
 
+def test_messaging_defaults_off(tmp_path: Path) -> None:
+    cfg = load_config(_write(tmp_path, _VALID))  # no messaging block at all
+    assert cfg.messaging.enabled is False
+    assert cfg.messaging.negotiate is False
+    assert cfg.messaging.offer_percent == 90
+
+
+def test_messaging_offer_percent_bounds(tmp_path: Path) -> None:
+    data = copy.deepcopy(_VALID)
+    data["messaging"] = {"enabled": True, "offer_percent": 40}
+    with pytest.raises(ConfigError):
+        load_config(_write(tmp_path, data))
+
+
+def test_messaging_unknown_key_rejected(tmp_path: Path) -> None:
+    data = copy.deepcopy(_VALID)
+    data["messaging"] = {"enabled": True, "auto_send": True}
+    with pytest.raises(ConfigError):
+        load_config(_write(tmp_path, data))
+
+
+def test_item_messaging_overrides(tmp_path: Path) -> None:
+    data = copy.deepcopy(_VALID)
+    data["messaging"] = {"enabled": True, "negotiate": False, "offer_percent": 90}
+    data["items"][0]["negotiate"] = True
+    data["items"][0]["offer_percent"] = 80
+    cfg = load_config(_write(tmp_path, data))
+    item = cfg.items[0]
+    assert item.effective_negotiate(cfg.messaging) is True
+    assert item.effective_offer_percent(cfg.messaging) == 80
+    # An item without overrides inherits the global block.
+    plain = copy.deepcopy(_VALID)
+    cfg2 = load_config(_write(tmp_path, plain))
+    assert cfg2.items[0].effective_negotiate(cfg.messaging) is False
+    assert cfg2.items[0].effective_offer_percent(cfg.messaging) == 90
+
+
 def test_example_file_loads() -> None:
     # The committed template must always be valid (no env needed: ntfy topic is literal).
     example = Path(__file__).resolve().parent.parent / "config.example.yaml"

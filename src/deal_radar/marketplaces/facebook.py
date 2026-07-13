@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config.schema import ItemConfig, MarketplaceConfig
-from ..errors import SearchError
+from ..errors import SearchError, SendError
 from ..logging import get_logger
 from ..models import Listing
 from ..paths import default_session_path
@@ -48,6 +48,16 @@ _DETAIL_MAX_CHARS = 2500  # cap the main-region fallback (keeps token cost sane)
 _DETAIL_TRAILING_MARKERS = ("Seller information", "Seller details")
 # Status badges Facebook prepends to a card's text; never a real title.
 _BADGE_RE = re.compile(r"^(just listed|new)$", re.IGNORECASE)
+# The PDP message composer. FB prefills "Is this available?" in a box near a Send
+# button; sometimes it sits behind a "Message"/"Send message" button that opens a
+# dialog. Not contractual — tune against a headful run if FB shifts.
+_MSG_TEXTBOX_SELECTORS = (
+    'textarea[aria-label*="message" i]',
+    'div[role="textbox"][aria-label*="message" i]',
+    'div[role="main"] textarea',
+)
+_MSG_OPEN_BUTTON_RE = re.compile(r"^(send )?message", re.IGNORECASE)
+_MSG_SEND_BUTTON_RE = re.compile(r"^send(?! message)", re.IGNORECASE)
 
 
 def _detect_currency(text: str) -> str:
@@ -361,6 +371,74 @@ class FacebookMarketplace:
                 location=location,
                 description=text.strip(),
             )
+
+    def _find_message_box(self, page: Any) -> Any:
+        """Locate the visible message composer on a listing page, or None."""
+        for selector in _MSG_TEXTBOX_SELECTORS:
+            try:
+                box = page.query_selector(selector)
+                if box is not None and box.is_visible():
+                    return box
+            except Exception:  # noqa: BLE001 - selector may not match this page
+                continue
+        return None
+
+    def send_message(self, listing_url: str, text: str) -> None:
+        """Open the listing and send ``text`` to the seller via the PDP composer.
+
+        Best-effort DOM automation; raises :class:`SendError` when the composer
+        can't be found or the click fails. On an *ambiguous* outcome (the click
+        went through but confirmation is unclear) we log a warning and treat the
+        message as sent — double-sending is worse than a missed send, and the
+        thread is visible in Messenger either way.
+        """
+        if self._context is None:
+            raise SendError("FacebookMarketplace must be used as a context manager")
+        page = self._context.new_page()
+        page.set_default_timeout(self._page_timeout_ms)
+        try:
+            self._pause.wait()
+            page.goto(listing_url, wait_until="domcontentloaded")
+            try:  # let the SPA render; FB rarely goes fully idle
+                page.wait_for_load_state("networkidle", timeout=5000)
+            except Exception:  # noqa: BLE001 - proceed with whatever rendered
+                pass
+
+            box = self._find_message_box(page)
+            if box is None:
+                # Dialog variant: the composer opens after a "Message" button.
+                try:
+                    page.get_by_role("button", name=_MSG_OPEN_BUTTON_RE).first.click(timeout=5000)
+                    page.wait_for_timeout(1000)
+                except Exception:  # noqa: BLE001 - fall through to the final check
+                    pass
+                box = self._find_message_box(page)
+            if box is None:
+                raise SendError(
+                    "could not find the message composer on the listing page "
+                    "(session expired, listing gone, or Facebook changed its DOM)"
+                )
+
+            box.click()
+            box.press("Control+a")  # replace FB's prefilled "Is this available?"
+            box.fill(text)
+            page.get_by_role("button", name=_MSG_SEND_BUTTON_RE).first.click(timeout=5000)
+
+            # Confirmation is best-effort: the composer clearing is our signal.
+            page.wait_for_timeout(1500)
+            try:
+                leftover = box.inner_text().strip()
+            except Exception:  # noqa: BLE001 - box may have been removed (dialog closed)
+                leftover = ""
+            if leftover:
+                log.warning("send confirmation ambiguous for %s; assuming sent", listing_url)
+            log.info("message sent for %s", listing_url)
+        except SendError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - surface any Playwright failure
+            raise SendError(f"sending message for {listing_url} failed: {exc}") from exc
+        finally:
+            page.close()
 
     def fetch_details(self, listing: Listing) -> Listing:
         if self._context is None:  # not in a `with` block; nothing we can do

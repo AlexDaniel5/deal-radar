@@ -21,3 +21,7 @@ class EvalError(DealRadarError):
 
 class NotifyError(DealRadarError):
     """Raised when delivering a notification fails."""
+
+
+class SendError(DealRadarError):
+    """Raised when sending a marketplace message to a seller fails."""

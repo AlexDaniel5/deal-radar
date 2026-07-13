@@ -40,6 +40,25 @@ class MarketplaceConfig(BaseModel):
     )
 
 
+class MessagingConfig(BaseModel):
+    """Drafting messages to sellers on matched listings (OFF by default; ToS-sensitive).
+
+    When enabled, a match creates a *draft* message that must be approved in the
+    web UI before anything is sent — nothing ever goes out automatically.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    negotiate: bool = False
+    offer_percent: int = Field(
+        90,
+        ge=50,
+        le=100,
+        description="Opening offer as % of asking, rounded to the nearest $5, never above asking.",
+    )
+
+
 class ScheduleConfig(BaseModel):
     """Polling cadence and politeness controls."""
 
@@ -92,6 +111,10 @@ class ItemConfig(BaseModel):
     min_rating: int | None = Field(
         None, ge=1, le=5, description="Overrides ai.min_rating for this item."
     )
+    negotiate: bool | None = Field(None, description="Overrides messaging.negotiate for this item.")
+    offer_percent: int | None = Field(
+        None, ge=50, le=100, description="Overrides messaging.offer_percent for this item."
+    )
 
     @model_validator(mode="after")
     def _check_prices(self) -> ItemConfig:
@@ -108,6 +131,12 @@ class ItemConfig(BaseModel):
     def effective_min_rating(self, ai: AIConfig) -> int:
         return self.min_rating if self.min_rating is not None else ai.min_rating
 
+    def effective_negotiate(self, messaging: MessagingConfig) -> bool:
+        return self.negotiate if self.negotiate is not None else messaging.negotiate
+
+    def effective_offer_percent(self, messaging: MessagingConfig) -> int:
+        return self.offer_percent if self.offer_percent is not None else messaging.offer_percent
+
 
 class AppConfig(BaseModel):
     """Top-level config."""
@@ -118,6 +147,7 @@ class AppConfig(BaseModel):
     ai: AIConfig = Field(default_factory=AIConfig)
     marketplaces: dict[str, MarketplaceConfig] = Field(default_factory=dict)
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
+    messaging: MessagingConfig = Field(default_factory=MessagingConfig)
     notifiers: list[NotifierConfig] = Field(min_length=1)
     items: list[ItemConfig] = Field(min_length=1)
 

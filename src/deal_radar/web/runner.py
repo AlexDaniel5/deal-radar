@@ -18,6 +18,7 @@ from ..dedup.sqlite_store import SqliteSeenStore
 from ..logging import get_logger
 from ..marketplaces.base import Marketplace
 from ..marketplaces.registry import build_marketplace
+from ..messaging.drafter import open_drafter
 from ..notifiers.registry import build_notifier
 from ..pipeline import scan_all
 from ..ratelimit import RateLimiter
@@ -54,7 +55,7 @@ def build_jobs(
         def _sleep(delay: float) -> None:
             stop.wait(delay)  # interruptible: returns early when stop is set
 
-        with SqliteSeenStore(paths.db_path()) as store:
+        with SqliteSeenStore(paths.db_path()) as store, open_drafter(cfg) as drafter:
 
             def scan() -> None:
                 scan_all(
@@ -64,15 +65,14 @@ def build_jobs(
                     evaluator=evaluator,
                     store=store,
                     notifiers=notifiers,
+                    drafter=drafter,
                     max_evaluations=max_evals,
                     dry_run=dry_run,
                     should_stop=stop.is_set,
                 )
 
             if loop:
-                run_loop(
-                    scan=scan, schedule=cfg.schedule, sleep=_sleep, should_stop=stop.is_set
-                )
+                run_loop(scan=scan, schedule=cfg.schedule, sleep=_sleep, should_stop=stop.is_set)
             else:
                 log.info("manual scan starting")
                 scan()

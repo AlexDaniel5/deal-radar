@@ -42,6 +42,7 @@ class NtfyNotifier:
                 f"{listing.title}\n"
                 f"{price} - {listing.location or 'location unknown'}\n"
                 f"{evaluation.rationale}"
+                + ("\nReply draft ready in the web UI" if event.draft_pending else "")
             ),
             "click": listing.url,
             # "camera" renders as a 📷 icon: the AI looked through the photos.

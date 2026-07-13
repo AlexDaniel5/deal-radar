@@ -57,7 +57,8 @@ def _print_stats(stats: ScanStats) -> None:
     print(
         f"  {stats.item}: found={stats.found} new_seen_skipped={stats.skipped_seen} "
         f"filtered={stats.skipped_filter} evaluated={stats.evaluated} "
-        f"matched={stats.matched} notified={stats.notified} errors={stats.errors}"
+        f"matched={stats.matched} drafted={stats.drafted} notified={stats.notified} "
+        f"errors={stats.errors}"
     )
 
 
@@ -121,6 +122,11 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     else:
         mks = "(none)"
     print(f"  marketplaces: {mks}")
+    msg = cfg.messaging
+    print(
+        f"  messaging: {'enabled' if msg.enabled else 'disabled'} "
+        f"negotiate={msg.negotiate} offer_percent={msg.offer_percent}"
+    )
     print(f"  notifiers: {', '.join(n.type for n in cfg.notifiers)}")
     enabled = sum(1 for i in cfg.items if i.enabled)
     print(f"  items: {len(cfg.items)} ({enabled} enabled)")
@@ -137,6 +143,7 @@ def _cmd_run_once(args: argparse.Namespace) -> int:
     # Imports are local so `validate-config`/`list-seen` don't pull heavy deps.
     from .ai.claude import ClaudeEvaluator
     from .dedup.sqlite_store import SqliteSeenStore
+    from .messaging.drafter import open_drafter
     from .notifiers.registry import build_notifier
     from .pipeline import scan_all
 
@@ -149,7 +156,11 @@ def _cmd_run_once(args: argparse.Namespace) -> int:
     make_marketplace = _marketplace_factory(cfg, headless=not args.headful, max_results=args.limit)
 
     print(f"run-once: {len(items)} item(s), dry_run={args.dry_run}")
-    with _graceful_sigint(), SqliteSeenStore(paths.db_path()) as store:
+    with (
+        _graceful_sigint(),
+        SqliteSeenStore(paths.db_path()) as store,
+        open_drafter(cfg) as drafter,
+    ):
         results = scan_all(
             cfg=cfg,
             items=items,
@@ -157,6 +168,7 @@ def _cmd_run_once(args: argparse.Namespace) -> int:
             evaluator=evaluator,
             store=store,
             notifiers=notifiers,
+            drafter=drafter,
             max_evaluations=args.max_evals,
             dry_run=args.dry_run,
             on_stats=_print_stats,
@@ -170,6 +182,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # Imports are local so `validate-config`/`list-seen` don't pull heavy deps.
     from .ai.claude import ClaudeEvaluator
     from .dedup.sqlite_store import SqliteSeenStore
+    from .messaging.drafter import open_drafter
     from .notifiers.registry import build_notifier
     from .pipeline import scan_all
     from .scheduler import run_loop
@@ -187,7 +200,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
         f"run: {len(items)} item(s) every ~{sched.poll_interval_seconds}s "
         f"(+/-{sched.jitter_seconds}s jitter), dry_run={args.dry_run}. Ctrl-C to stop."
     )
-    with _graceful_sigint(), SqliteSeenStore(paths.db_path()) as store:
+    with (
+        _graceful_sigint(),
+        SqliteSeenStore(paths.db_path()) as store,
+        open_drafter(cfg) as drafter,
+    ):
 
         def scan() -> None:
             scan_all(
@@ -197,6 +214,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 evaluator=evaluator,
                 store=store,
                 notifiers=notifiers,
+                drafter=drafter,
                 max_evaluations=args.max_evals,
                 dry_run=args.dry_run,
                 on_stats=_print_stats,

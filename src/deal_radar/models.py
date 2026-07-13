@@ -38,3 +38,4 @@ class NotificationEvent:
     item_name: str
     listing: Listing
     evaluation: Evaluation
+    draft_pending: bool = False  # a seller-message draft awaits approval in the web UI

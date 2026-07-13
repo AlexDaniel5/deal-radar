@@ -1,17 +1,24 @@
-"""Tests for the Phase 5 web UI: ScannerController, log buffer, and FastAPI endpoints."""
+"""Tests for the web UI: ScannerController, log buffer, sender, and FastAPI endpoints."""
 
 from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 
+from deal_radar import paths
+from deal_radar.errors import SendError
 from deal_radar.logging import LogBuffer
+from deal_radar.messaging.store import SqliteDraftStore
+from deal_radar.models import Listing
 from deal_radar.web.app import create_app
 from deal_radar.web.controller import ScannerController
+from deal_radar.web.sender import MessageSender
 
 VALID_CONFIG = """version: 1
 ai: {model: claude-haiku-4-5, min_rating: 4}
@@ -146,3 +153,174 @@ def test_scanner_start_stop_endpoints(tmp_path: Path) -> None:
     assert client.post("/api/scanner/start", params={"mode": "loop"}).json()["started"] is False
     client.post("/api/scanner/stop")
     assert _wait(lambda: not ctl.is_running())
+
+
+# --- MessageSender ------------------------------------------------------------
+
+
+def _store_factory(tmp_path: Path) -> Callable[[], SqliteDraftStore]:
+    return lambda: SqliteDraftStore(tmp_path / "drafts.sqlite3")
+
+
+def _add_draft(store_factory: Callable[[], SqliteDraftStore]) -> dict[str, Any]:
+    listing = Listing(id="1", marketplace="facebook", title="RTX PC", url="u/1", price=500.0)
+    with store_factory() as store:
+        draft_id = store.add_draft(
+            item_name="PC", listing=listing, message="hi there", offer_price=450
+        )
+        draft = store.get(draft_id)
+    assert draft is not None
+    return draft
+
+
+def test_sender_sends_and_marks_sent(tmp_path: Path) -> None:
+    factory = _store_factory(tmp_path)
+    draft = _add_draft(factory)
+    sent: list[tuple[int, str]] = []
+    sender = MessageSender(lambda d, text: sent.append((d["id"], text)), factory)
+    assert sender.send(draft, "edited text") is True
+    assert _wait(lambda: not sender.is_busy())
+    assert sent == [(draft["id"], "edited text")]
+    with factory() as store:
+        row = store.get(draft["id"])
+    assert row is not None and row["status"] == "sent" and row["error"] is None
+
+
+def test_sender_failure_marks_failed(tmp_path: Path) -> None:
+    factory = _store_factory(tmp_path)
+    draft = _add_draft(factory)
+
+    def boom(d: dict[str, Any], text: str) -> None:
+        raise SendError("kaboom")
+
+    sender = MessageSender(boom, factory)
+    assert sender.send(draft, "hi") is True
+    assert _wait(lambda: not sender.is_busy())
+    with factory() as store:
+        row = store.get(draft["id"])
+    assert row is not None and row["status"] == "failed"
+    assert "kaboom" in (row["error"] or "")
+    assert "kaboom" in (sender.status()["last_error"] or "")
+
+
+def test_sender_serializes_sends(tmp_path: Path) -> None:
+    factory = _store_factory(tmp_path)
+    draft = _add_draft(factory)
+    release = threading.Event()
+    sender = MessageSender(lambda d, text: release.wait(2.0) and None, factory)
+    assert sender.send(draft, "a") is True
+    assert sender.is_busy()
+    assert sender.send(draft, "b") is False  # one at a time
+    assert sender.status()["draft_id"] == draft["id"]
+    release.set()
+    assert _wait(lambda: not sender.is_busy())
+
+
+# --- Drafts endpoints -----------------------------------------------------------
+
+
+def _draft_client(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    send_fn: Callable[[dict[str, Any], str], None] | None = None,
+) -> tuple[TestClient, Callable[[], SqliteDraftStore], MessageSender, list[tuple[int, str]]]:
+    monkeypatch.setenv("DEAL_RADAR_DATA_DIR", str(tmp_path / "data"))
+    factory = lambda: SqliteDraftStore(paths.db_path())  # noqa: E731 - matches app wiring
+    sent: list[tuple[int, str]] = []
+    sender = MessageSender(send_fn or (lambda d, text: sent.append((d["id"], text))), factory)
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(VALID_CONFIG)
+    app = create_app(
+        config_path=str(cfg),
+        controller=ScannerController(_block_until_stop, lambda s: None),
+        log_buffer=LogBuffer(),
+        sender=sender,
+    )
+    return TestClient(app), factory, sender, sent
+
+
+def test_drafts_empty_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    client, _, _, _ = _draft_client(tmp_path, monkeypatch)
+    assert client.get("/api/drafts").json() == {"rows": [], "sending": False}
+
+
+def test_drafts_list_and_approve_with_edited_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, factory, sender, sent = _draft_client(tmp_path, monkeypatch)
+    draft = _add_draft(factory)
+    rows = client.get("/api/drafts").json()["rows"]
+    assert [r["id"] for r in rows] == [draft["id"]]
+    assert rows[0]["offer_price"] == 450
+
+    resp = client.post(f"/api/drafts/{draft['id']}/approve", json={"message": "hi (edited)"})
+    assert resp.status_code == 200 and resp.json()["ok"] is True
+    assert _wait(lambda: not sender.is_busy())
+    assert sent == [(draft["id"], "hi (edited)")]
+    with factory() as store:
+        row = store.get(draft["id"])
+    assert row is not None and row["status"] == "sent" and row["message"] == "hi (edited)"
+
+
+def test_approve_unknown_draft_404(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    client, _, _, _ = _draft_client(tmp_path, monkeypatch)
+    assert client.post("/api/drafts/999/approve").status_code == 404
+
+
+def test_approve_wrong_status_409(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    client, factory, _, _ = _draft_client(tmp_path, monkeypatch)
+    draft = _add_draft(factory)
+    assert client.post(f"/api/drafts/{draft['id']}/dismiss").status_code == 200
+    assert client.post(f"/api/drafts/{draft['id']}/approve").status_code == 409
+
+
+def test_approve_while_busy_409(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    release = threading.Event()
+    client, factory, sender, _ = _draft_client(
+        tmp_path, monkeypatch, send_fn=lambda d, text: release.wait(2.0) and None
+    )
+    draft = _add_draft(factory)
+    with factory() as store:
+        listing2 = Listing(id="2", marketplace="facebook", title="PC 2", url="u/2", price=300.0)
+        second_id = store.add_draft(
+            item_name="PC", listing=listing2, message="yo", offer_price=None
+        )
+    assert client.post(f"/api/drafts/{draft['id']}/approve").status_code == 200
+    assert client.post(f"/api/drafts/{second_id}/approve").status_code == 409
+    release.set()
+    assert _wait(lambda: not sender.is_busy())
+
+
+def test_failed_send_records_error_and_allows_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def boom(d: dict[str, Any], text: str) -> None:
+        raise SendError("selector missing")
+
+    client, factory, sender, _ = _draft_client(tmp_path, monkeypatch, send_fn=boom)
+    draft = _add_draft(factory)
+    assert client.post(f"/api/drafts/{draft['id']}/approve").status_code == 200
+    assert _wait(lambda: not sender.is_busy())
+    with factory() as store:
+        row = store.get(draft["id"])
+    assert row is not None and row["status"] == "failed"
+    assert "selector missing" in (row["error"] or "")
+    # Retrying a failed draft is allowed.
+    assert client.post(f"/api/drafts/{draft['id']}/approve").status_code == 200
+    assert _wait(lambda: not sender.is_busy())
+
+
+def test_dismiss_unknown_draft_404(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    client, _, _, _ = _draft_client(tmp_path, monkeypatch)
+    assert client.post("/api/drafts/999/dismiss").status_code == 404
+
+
+def test_dismiss_sets_status(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    client, factory, _, _ = _draft_client(tmp_path, monkeypatch)
+    draft = _add_draft(factory)
+    assert client.post(f"/api/drafts/{draft['id']}/dismiss").status_code == 200
+    with factory() as store:
+        row = store.get(draft["id"])
+    assert row is not None and row["status"] == "dismissed"
+    # A dismissed draft can't be dismissed (or approved) again.
+    assert client.post(f"/api/drafts/{draft['id']}/dismiss").status_code == 409

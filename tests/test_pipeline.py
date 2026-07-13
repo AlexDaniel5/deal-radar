@@ -374,6 +374,84 @@ def test_fetch_details_disabled_skips_enrichment() -> None:
     assert ev.seen[0].description == ""  # card text, not the detail body
 
 
+class FakeDrafter:
+    def __init__(self, *, boom: bool = False) -> None:
+        self.calls: list[str] = []
+        self._boom = boom
+
+    def draft(self, item: ItemConfig, listing: Listing, evaluation: Evaluation) -> None:
+        self.calls.append(listing.id)
+        if self._boom:
+            raise RuntimeError("compose failed")
+
+
+def test_drafter_called_on_match_and_flags_event() -> None:
+    drafter, notifier = FakeDrafter(), FakeNotifier()
+    stats = scan_item(
+        item=_item(),
+        marketplace=FakeMarket([_listing("1")]),
+        ctx=_ctx(),
+        evaluator=FakeEval({"1": _good()}),
+        store=FakeStore(),
+        notifiers=[notifier],
+        ai=AI,
+        drafter=drafter,
+    )
+    assert drafter.calls == ["1"]
+    assert stats.drafted == 1
+    assert notifier.events[0].draft_pending is True
+
+
+def test_drafter_not_called_below_threshold() -> None:
+    drafter = FakeDrafter()
+    scan_item(
+        item=_item(),
+        marketplace=FakeMarket([_listing("1")]),
+        ctx=_ctx(),
+        evaluator=FakeEval({"1": _good(rating=3)}),
+        store=FakeStore(),
+        notifiers=[],
+        ai=AI,
+        drafter=drafter,
+    )
+    assert drafter.calls == []
+
+
+def test_drafter_not_called_on_dry_run() -> None:
+    drafter = FakeDrafter()
+    stats = scan_item(
+        item=_item(),
+        marketplace=FakeMarket([_listing("1")]),
+        ctx=_ctx(),
+        evaluator=FakeEval({"1": _good()}),
+        store=FakeStore(),
+        notifiers=[],
+        ai=AI,
+        drafter=drafter,
+        dry_run=True,
+    )
+    assert drafter.calls == []
+    assert stats.drafted == 0
+
+
+def test_drafter_failure_counts_error_and_still_notifies() -> None:
+    drafter, notifier = FakeDrafter(boom=True), FakeNotifier()
+    stats = scan_item(
+        item=_item(),
+        marketplace=FakeMarket([_listing("1")]),
+        ctx=_ctx(),
+        evaluator=FakeEval({"1": _good()}),
+        store=FakeStore(),
+        notifiers=[notifier],
+        ai=AI,
+        drafter=drafter,
+    )
+    assert stats.drafted == 0
+    assert stats.errors == 1
+    assert len(notifier.events) == 1  # notification still goes out
+    assert notifier.events[0].draft_pending is False
+
+
 def test_scan_item_should_stop_halts_before_first_listing() -> None:
     ev = FakeEval({})
     stats = scan_item(

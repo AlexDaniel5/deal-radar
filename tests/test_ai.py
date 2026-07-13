@@ -7,14 +7,15 @@ from typing import Any
 import pytest
 
 from deal_radar.ai.claude import ClaudeEvaluator
-from deal_radar.ai.prompt import Verdict, build_user_prompt
+from deal_radar.ai.composer import ClaudeComposer
+from deal_radar.ai.prompt import DraftMessage, Verdict, build_compose_prompt, build_user_prompt
 from deal_radar.config.schema import AIConfig, ItemConfig
 from deal_radar.errors import EvalError
 from deal_radar.models import Listing
 
 
 class _Messages:
-    def __init__(self, parsed: Verdict | None = None, exc: Exception | None = None) -> None:
+    def __init__(self, parsed: Any = None, exc: Exception | None = None) -> None:
         self._parsed = parsed
         self._exc = exc
         self.calls: list[dict[str, Any]] = []
@@ -27,7 +28,7 @@ class _Messages:
 
 
 class _Client:
-    def __init__(self, parsed: Verdict | None = None, exc: Exception | None = None) -> None:
+    def __init__(self, parsed: Any = None, exc: Exception | None = None) -> None:
         self.messages = _Messages(parsed, exc)
 
 
@@ -115,3 +116,37 @@ def test_build_user_prompt_contains_fields() -> None:
     assert "RTX 3070 PC" in prompt
     assert "600" in prompt
     assert "RTX 3070 desktop" in prompt
+
+
+def test_build_compose_prompt_with_offer() -> None:
+    prompt = build_compose_prompt(_item(), _listing(), 450)
+    assert "opening offer of 450 USD" in prompt
+    assert "RTX 3070 PC" in prompt
+
+
+def test_build_compose_prompt_availability_only() -> None:
+    prompt = build_compose_prompt(_item(), _listing(), None)
+    assert "still available" in prompt
+    assert "offer" not in prompt.lower()
+
+
+def test_composer_returns_message_text() -> None:
+    client = _Client(parsed=DraftMessage(message="Hi! Is this still available?"))
+    composer = ClaudeComposer(AIConfig(model="claude-haiku-4-5"), client=client)
+    text = composer.compose(_item(), _listing(), 450)
+    assert text == "Hi! Is this still available?"
+    call = client.messages.calls[0]
+    assert call["output_format"] is DraftMessage
+    assert "450" in call["messages"][0]["content"]
+
+
+def test_composer_none_output_raises() -> None:
+    composer = ClaudeComposer(AIConfig(), client=_Client(parsed=None))
+    with pytest.raises(EvalError):
+        composer.compose(_item(), _listing(), None)
+
+
+def test_composer_wraps_sdk_error() -> None:
+    composer = ClaudeComposer(AIConfig(), client=_Client(exc=RuntimeError("boom")))
+    with pytest.raises(EvalError, match="boom"):
+        composer.compose(_item(), _listing(), None)

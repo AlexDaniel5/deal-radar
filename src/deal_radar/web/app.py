@@ -15,7 +15,9 @@ from .. import paths
 from ..config.loader import validate_config_text
 from ..errors import ConfigError
 from ..logging import LogBuffer, attach_log_buffer, get_logger
+from ..messaging.store import SqliteDraftStore
 from .controller import ScannerController
+from .sender import MessageSender
 
 log = get_logger("web.app")
 
@@ -25,8 +27,9 @@ def create_app(
     config_path: str = "config.yaml",
     controller: ScannerController | None = None,
     log_buffer: LogBuffer | None = None,
+    sender: MessageSender | None = None,
 ) -> FastAPI:
-    """Build the web app. Inject ``controller``/``log_buffer`` in tests to avoid a browser."""
+    """Build the web app. Inject ``controller``/``log_buffer``/``sender`` in tests."""
     app = FastAPI(title="deal-radar")
     cfg_path = Path(config_path)
     buffer = log_buffer if log_buffer is not None else attach_log_buffer()
@@ -37,6 +40,14 @@ def create_app(
         loop_job, once_job = build_jobs(str(cfg_path))
         controller = ScannerController(loop_job, once_job)
     ctl: ScannerController = controller  # non-None for use inside the closures below
+
+    if sender is None:
+        from .sender import build_send_fn
+
+        sender = MessageSender(
+            build_send_fn(str(cfg_path)), lambda: SqliteDraftStore(paths.db_path())
+        )
+    snd: MessageSender = sender
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
@@ -91,6 +102,58 @@ def create_app(
         rows.sort(key=lambda r: str(r.get("first_seen_ts") or ""), reverse=True)
         return {"rows": rows[:limit]}
 
+    @app.get("/api/drafts")
+    def drafts(limit: int = 50) -> dict[str, Any]:
+        db = paths.db_path()
+        if not db.is_file():
+            return {"rows": [], "sending": snd.is_busy()}
+        with SqliteDraftStore(db) as store:
+            rows = store.list_drafts(limit=limit)
+        return {"rows": rows, "sending": snd.is_busy()}
+
+    @app.post("/api/drafts/{draft_id}/approve")
+    async def approve_draft(draft_id: int, request: Request) -> JSONResponse:
+        try:
+            body = json.loads((await request.body()) or b"{}")
+        except json.JSONDecodeError:
+            body = {}
+        with SqliteDraftStore(paths.db_path()) as store:
+            draft = store.get(draft_id)
+            if draft is None:
+                return JSONResponse({"ok": False, "error": "unknown draft"}, status_code=404)
+            if draft["status"] not in ("pending", "failed"):
+                return JSONResponse(
+                    {"ok": False, "error": f"draft is {draft['status']}"}, status_code=409
+                )
+            if snd.is_busy():
+                return JSONResponse(
+                    {"ok": False, "error": "another send is in progress"}, status_code=409
+                )
+            text = str(body.get("message") or "").strip() or str(draft["message"])
+            store.set_status(draft_id, "sending", message=text)
+            draft["message"] = text
+        if not snd.send(draft, text):
+            with SqliteDraftStore(paths.db_path()) as store:
+                store.set_status(draft_id, str(draft["status"]))
+            return JSONResponse(
+                {"ok": False, "error": "another send is in progress"}, status_code=409
+            )
+        log.info("draft #%d approved via web UI", draft_id)
+        return JSONResponse({"ok": True, "status": snd.status()})
+
+    @app.post("/api/drafts/{draft_id}/dismiss")
+    def dismiss_draft(draft_id: int) -> JSONResponse:
+        with SqliteDraftStore(paths.db_path()) as store:
+            draft = store.get(draft_id)
+            if draft is None:
+                return JSONResponse({"ok": False, "error": "unknown draft"}, status_code=404)
+            if draft["status"] not in ("pending", "failed"):
+                return JSONResponse(
+                    {"ok": False, "error": f"draft is {draft['status']}"}, status_code=409
+                )
+            store.set_status(draft_id, "dismissed")
+        return JSONResponse({"ok": True})
+
     @app.get("/api/status")
     def status() -> dict[str, Any]:
         return ctl.status()
@@ -125,6 +188,7 @@ def create_app(
 
     app.state.controller = ctl
     app.state.log_buffer = buffer
+    app.state.sender = snd
     return app
 
 
@@ -144,7 +208,10 @@ _PAGE = """<!doctype html>
   main { padding: 18px; display: grid; gap: 18px; grid-template-columns: 1fr 1fr; }
   section { background: #171a21; border: 1px solid #2a2f3a; border-radius: 8px; padding: 14px; }
   section h2 { font-size: 13px; margin: 0 0 10px; color: #9aa4b2; text-transform: uppercase; letter-spacing: .04em; }
-  #logsec, #configsec { grid-column: 1 / -1; }
+  #logsec, #configsec, #draftsec { grid-column: 1 / -1; }
+  .draft { border: 1px solid #2a2f3a; border-radius: 6px; padding: 10px; margin-bottom: 10px; }
+  .draft textarea { height: 64px; margin-top: 6px; }
+  .tag { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: #2a3140; }
   button { background: #2a3140; color: #e6e6e6; border: 1px solid #3a4353; border-radius: 6px;
            padding: 6px 12px; cursor: pointer; font: inherit; }
   button:hover { background: #333c4d; }
@@ -186,6 +253,10 @@ _PAGE = """<!doctype html>
   <section>
     <h2>Items</h2>
     <div id="items" class="muted">…</div>
+  </section>
+  <section id="draftsec">
+    <h2>Message drafts</h2>
+    <div id="drafts" class="muted">…</div>
   </section>
   <section id="logsec">
     <h2>Live log</h2>
@@ -235,14 +306,79 @@ async function loadSummary() {
     '<div>' + (i.enabled ? '' : '(disabled) ') + '<b>' + i.name.replace(/</g,'&lt;') + '</b> — $' +
     (i.price_min ?? 0) + '–' + (i.price_max ?? '∞') + ', min ' + i.min_rating + '/5</div>').join('');
 }
+function fmtDate(ts) {
+  return ts ? new Date(ts * 1000).toLocaleDateString(undefined, {month: 'short', day: 'numeric'}) : '?';
+}
+function draftCard(r) {
+  const esc = s => String(s == null ? '' : s).replace(/</g, '&lt;');
+  const card = document.createElement('div');
+  card.className = 'draft';
+  const asking = r.asking_price != null ? '$' + Math.round(r.asking_price) : '$?';
+  const offer = r.offer_price != null ? asking + ' &rarr; offer $' + r.offer_price : asking + ' (asking price)';
+  card.innerHTML = '<span class="muted">' + fmtDate(r.created_ts) + '</span> <b>' + esc(r.item_name) +
+    '</b> — <a href="' + r.url + '" target="_blank" rel="noopener">' + esc(r.title) + '</a> · ' + offer +
+    (r.status === 'sending' ? ' · <span class="muted">sending…</span>' : '') +
+    (r.error ? ' · <span class="err">' + esc(r.error) + '</span>' : '');
+  const ta = document.createElement('textarea');
+  ta.value = r.message;  // DOM property: safe for quotes/angle brackets
+  card.appendChild(ta);
+  if (r.status !== 'sending') {
+    const row = document.createElement('div');
+    row.style.marginTop = '6px';
+    const send = document.createElement('button');
+    send.className = 'primary';
+    send.textContent = r.status === 'failed' ? 'Retry send' : 'Approve & send';
+    send.onclick = () => draftAction(r.id, 'approve', ta.value);
+    const dis = document.createElement('button');
+    dis.textContent = 'Dismiss';
+    dis.style.marginLeft = '8px';
+    dis.onclick = () => draftAction(r.id, 'dismiss');
+    row.appendChild(send); row.appendChild(dis);
+    card.appendChild(row);
+  }
+  return card;
+}
+async function loadDrafts() {
+  const active = document.activeElement;
+  if (active && active.closest && active.closest('#drafts')) return; // don't clobber an edit
+  const j = await (await fetch('/api/drafts')).json();
+  const el = $('#drafts');
+  el.textContent = '';
+  const rows = j.rows || [];
+  if (!rows.length) { el.innerHTML = '<span class="muted">no drafts yet — enable messaging in the config</span>'; return; }
+  for (const r of rows) {
+    if (r.status === 'pending' || r.status === 'failed' || r.status === 'sending') {
+      el.appendChild(draftCard(r));
+    } else {
+      const line = document.createElement('div');
+      line.className = 'muted';
+      line.innerHTML = '<span class="tag">' + r.status + '</span> ' + fmtDate(r.updated_ts) + ' ' +
+        String(r.item_name).replace(/</g, '&lt;') + ': ' + String(r.title).replace(/</g, '&lt;');
+      el.appendChild(line);
+    }
+  }
+}
+async function draftAction(id, action, message) {
+  const opts = {method: 'POST'};
+  if (message !== undefined) {
+    opts.headers = {'Content-Type': 'application/json'};
+    opts.body = JSON.stringify({message});
+  }
+  const r = await fetch('/api/drafts/' + id + '/' + action, opts);
+  if (!r.ok) {
+    const j = await r.json().catch(() => ({}));
+    alert(j.error || 'request failed');
+  }
+  loadDrafts();
+}
 const log = $('#log');
 new EventSource('/api/logs/stream').onmessage = e => {
   const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
   log.textContent += JSON.parse(e.data).line + '\\n';
   if (atBottom) log.scrollTop = log.scrollHeight;
 };
-loadConfig(); loadSeen(); loadSummary(); refreshStatus();
-setInterval(refreshStatus, 3000); setInterval(loadSeen, 15000);
+loadConfig(); loadSeen(); loadSummary(); loadDrafts(); refreshStatus();
+setInterval(refreshStatus, 3000); setInterval(loadSeen, 15000); setInterval(loadDrafts, 10000);
 </script>
 </body>
 </html>
