@@ -82,17 +82,79 @@ def _photo_listing() -> Listing:
     )
 
 
-def test_evaluate_attaches_all_photos_on_keyword() -> None:
+def _fake_fetch(url: str) -> tuple[bytes, str] | None:
+    return (f"bytes-of-{url}".encode(), "image/jpeg")
+
+
+def test_evaluate_attaches_downloaded_photos_on_keyword() -> None:
     client = _Client(parsed=Verdict(match=True, rating=4, rationale="good"))
-    evaluator = ClaudeEvaluator(AIConfig(analyze_images=True), client=client)
+    evaluator = ClaudeEvaluator(
+        AIConfig(analyze_images=True), client=client, fetch_image=_fake_fetch
+    )
     result = evaluator.evaluate(_item(), _photo_listing())
     assert result.images_analyzed is True
     content = client.messages.calls[0]["messages"][0]["content"]
     assert isinstance(content, list)
     images = [b for b in content if b["type"] == "image"]
-    assert [b["source"]["url"] for b in images] == ["https://cdn/img1.jpg", "https://cdn/img2.jpg"]
+    assert len(images) == 2
+    # Photos are sent base64 (Anthropic's URL fetcher honors robots.txt; FB's CDN blocks it).
+    assert all(b["source"]["type"] == "base64" for b in images)
+    assert all(b["source"]["media_type"] == "image/jpeg" for b in images)
+    import base64
+
+    assert (
+        base64.standard_b64decode(images[0]["source"]["data"]) == b"bytes-of-https://cdn/img1.jpg"
+    )
     assert content[-1]["type"] == "text"
     assert "RTX 3070 PC" in content[-1]["text"]
+
+
+def test_evaluate_caps_photos_at_max_images() -> None:
+    client = _Client(parsed=Verdict(match=True, rating=4, rationale="good"))
+    evaluator = ClaudeEvaluator(
+        AIConfig(analyze_images=True, max_images=1), client=client, fetch_image=_fake_fetch
+    )
+    evaluator.evaluate(_item(), _photo_listing())
+    content = client.messages.calls[0]["messages"][0]["content"]
+    assert len([b for b in content if b["type"] == "image"]) == 1
+
+
+def test_evaluate_falls_back_to_text_when_downloads_fail() -> None:
+    client = _Client(parsed=Verdict(match=True, rating=4, rationale="good"))
+    evaluator = ClaudeEvaluator(
+        AIConfig(analyze_images=True), client=client, fetch_image=lambda url: None
+    )
+    result = evaluator.evaluate(_item(), _photo_listing())
+    assert result.images_analyzed is False
+    assert isinstance(client.messages.calls[0]["messages"][0]["content"], str)
+
+
+def test_evaluate_retries_text_only_when_image_call_rejected() -> None:
+    verdict = Verdict(match=True, rating=4, rationale="good")
+
+    class _FlakyMessages:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        def parse(self, **kwargs: Any) -> Any:
+            self.calls.append(kwargs)
+            if isinstance(kwargs["messages"][0]["content"], list):  # the image-bearing call
+                raise RuntimeError("robots.txt disallowed")
+            return type("Resp", (), {"parsed_output": verdict})()
+
+    class _FlakyClient:
+        def __init__(self) -> None:
+            self.messages = _FlakyMessages()
+
+    client = _FlakyClient()
+    evaluator = ClaudeEvaluator(
+        AIConfig(analyze_images=True), client=client, fetch_image=_fake_fetch
+    )
+    result = evaluator.evaluate(_item(), _photo_listing())
+    assert result.match is True
+    assert result.images_analyzed is False  # the verdict came from the text-only retry
+    assert len(client.messages.calls) == 2
+    assert isinstance(client.messages.calls[1]["messages"][0]["content"], str)
 
 
 def test_evaluate_text_only_without_photo_keyword() -> None:
