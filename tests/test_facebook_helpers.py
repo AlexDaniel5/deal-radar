@@ -6,12 +6,14 @@ from deal_radar.config.schema import ItemConfig, MarketplaceConfig
 from deal_radar.marketplaces.facebook import (
     _DETAIL_MAIN_SELECTOR,
     _DETAIL_TEXT_SELECTORS,
+    _card_is_relevant,
     _detect_currency,
     _extract_detail_text,
     _extract_item_id,
     _parse_card_text,
     _parse_price,
     _pick_detail_text,
+    _relevance_tokens,
     build_search_url,
 )
 
@@ -176,3 +178,37 @@ def test_build_search_url() -> None:
     assert "minPrice=400" in url
     assert "maxPrice=1100" in url
     assert "radius=50" in url
+
+
+def _pc_item() -> ItemConfig:
+    return ItemConfig(
+        name="pc",
+        marketplaces=["facebook"],
+        search_phrases=["gaming pc", "gaming computer", "rtx 3080"],
+        include_keywords=["rtx", "ryzen", "intel i7", "i9"],
+        description="d",
+    )
+
+
+def test_relevance_tokens_from_phrases_and_includes() -> None:
+    tokens = _relevance_tokens(_pc_item())
+    assert {"gaming", "pc", "computer", "rtx", "3080", "ryzen", "intel", "i7", "i9"} <= tokens
+
+
+def test_card_relevance_keeps_real_pcs() -> None:
+    tokens = _relevance_tokens(_pc_item())
+    assert _card_is_relevant("RTX 3080 | Ryzen 5 5600 Custom Gaming PC", tokens)
+    assert _card_is_relevant("Custom Gaming Computer, i7", tokens)
+
+
+def test_card_relevance_drops_facebook_padding() -> None:
+    # The unrelated 'suggested' listings that a deep scroll scooped up.
+    tokens = _relevance_tokens(_pc_item())
+    assert not _card_is_relevant("Brand New Napoleon Rouge 625 Propane Gas BBQ Grill", tokens)
+    assert not _card_is_relevant("SimSpace Golf Enclosure & Tee Turf Hitting Mat", tokens)
+    assert not _card_is_relevant("Bosch VeroCafe 500 Series Espresso Machine", tokens)
+    assert not _card_is_relevant("Valerion Fresnel ALR Projector Screen - 120", tokens)
+
+
+def test_card_relevance_passes_through_when_no_tokens() -> None:
+    assert _card_is_relevant("anything at all", set())

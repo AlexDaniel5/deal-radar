@@ -108,7 +108,7 @@ deal-radar run-once --headful --max-evals 1 --log-level DEBUG
 
 ## Web UI
 
-Run the local web server, then open http://127.0.0.1:8000:
+Run the local web server with `.venv/bin/deal-radar serve`, then open http://127.0.0.1:8000:
 
 ```bash
 .venv/bin/deal-radar serve

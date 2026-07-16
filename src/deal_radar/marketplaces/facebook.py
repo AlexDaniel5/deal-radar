@@ -226,6 +226,33 @@ def _parse_card_text(text: str) -> tuple[float | None, str, str | None]:
     return price, title, location
 
 
+_WORD_RE = re.compile(r"[a-z0-9]+")
+
+
+def _relevance_tokens(item: ItemConfig) -> set[str]:
+    """Query words used to drop the unrelated cards Facebook pads a feed with.
+
+    Once genuine matches run out, Facebook appends 'suggested' listings from
+    unrelated categories; scrolling deep to raise coverage scoops them up (BBQs,
+    apartments). A collected card must share at least one of these words. The
+    vocabulary is derived only from the item's own ``search_phrases`` and
+    ``include_keywords`` so the gate stays generic (a 'bike' item works too) — it
+    is a coarse relevance check on the sparse card text, NOT the spec match, which
+    the AI still judges on the detail page.
+    """
+    tokens: set[str] = set()
+    for phrase in (*item.search_phrases, *item.include_keywords):
+        tokens.update(w for w in _WORD_RE.findall(phrase.lower()) if len(w) >= 2)
+    return tokens
+
+
+def _card_is_relevant(text: str, tokens: set[str]) -> bool:
+    """True if the card text shares any query word (or there is nothing to gate on)."""
+    if not tokens:
+        return True
+    return not set(_WORD_RE.findall(text.lower())).isdisjoint(tokens)
+
+
 def build_search_url(query: str, item: ItemConfig, marketplace: MarketplaceConfig) -> str:
     """Build a Facebook Marketplace search URL for one query phrase."""
     params: dict[str, str] = {
@@ -265,10 +292,10 @@ class FacebookMarketplace:
         self,
         config: MarketplaceConfig,
         *,
-        max_results: int = 40,
+        max_results: int = 200,
         headless: bool = True,
         page_timeout_ms: int = 30_000,
-        scrolls: int = 2,
+        max_scrolls: int = 40,
         pause: RateLimiter | None = None,
     ) -> None:
         self._config = config
@@ -276,7 +303,7 @@ class FacebookMarketplace:
         self._max_results = max_results
         self._headless = headless
         self._page_timeout_ms = page_timeout_ms
-        self._scrolls = scrolls
+        self._max_scrolls = max_scrolls
         self._pause = pause if pause is not None else RateLimiter(4.0, 3.0)
         self._pw: Any = None
         self._browser: Any = None
@@ -314,6 +341,7 @@ class FacebookMarketplace:
         if self._context is None:
             raise SearchError("FacebookMarketplace must be used as a context manager")
         seen_ids: set[str] = set()
+        tokens = _relevance_tokens(item)
         page = self._context.new_page()
         page.set_default_timeout(self._page_timeout_ms)
         try:
@@ -326,17 +354,42 @@ class FacebookMarketplace:
                 try:
                     page.goto(url, wait_until="domcontentloaded")
                     page.wait_for_selector(_ITEM_ANCHOR, timeout=self._page_timeout_ms)
-                    for _ in range(self._scrolls):
-                        page.mouse.wheel(0, 4000)
-                        page.wait_for_timeout(1200)
+                    self._scroll_until_loaded(page)
                 except Exception as exc:  # noqa: BLE001 - skip a failed phrase, keep going
                     log.warning("facebook search for %r failed: %s", phrase, exc)
                     continue
-                yield from self._collect(page, seen_ids)
+                yield from self._collect(page, seen_ids, tokens)
         finally:
             page.close()
 
-    def _collect(self, page: Any, seen_ids: set[str]) -> Iterator[Listing]:
+    def _scroll_until_loaded(self, page: Any) -> None:
+        """Scroll the results feed until it stops growing or enough cards loaded.
+
+        Facebook lazy-loads listing cards as you scroll, so a fixed scroll count
+        silently caps how many listings we ever see (the old 2-scroll default only
+        surfaced the ~40 newest). Keep scrolling while new anchors keep appearing,
+        bounded by ``max_results`` and a hard scroll ceiling so a bottomless feed
+        can't hang the run.
+        """
+        previous = 0
+        stagnant = 0
+        for _ in range(self._max_scrolls):
+            count = len(page.query_selector_all(_ITEM_ANCHOR))
+            if count >= self._max_results:
+                break
+            if count == previous:
+                stagnant += 1
+                if stagnant >= 3:  # no new cards after several tries: feed exhausted
+                    break
+            else:
+                stagnant = 0
+            previous = count
+            page.mouse.wheel(0, 6000)
+            page.wait_for_timeout(1200)
+
+    def _collect(
+        self, page: Any, seen_ids: set[str], tokens: set[str]
+    ) -> Iterator[Listing]:
         anchors = page.query_selector_all(_ITEM_ANCHOR)
         for anchor in anchors:
             if len(seen_ids) >= self._max_results:
@@ -359,6 +412,10 @@ class FacebookMarketplace:
                 text.replace("\n", " | "),
             )
             if not title:
+                continue
+            if not _card_is_relevant(text, tokens):
+                # Unrelated 'suggested' padding FB appends past the real matches.
+                log.debug("skip irrelevant card id=%s title=%r", item_id, title)
                 continue
             seen_ids.add(item_id)
             yield Listing(

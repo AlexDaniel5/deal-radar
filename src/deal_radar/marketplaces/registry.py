@@ -13,7 +13,7 @@ def build_marketplace(
     config: MarketplaceConfig,
     *,
     headless: bool = True,
-    max_results: int = 40,
+    max_results: int = 200,
     pause: RateLimiter | None = None,
 ) -> Marketplace:
     """Instantiate the adapter for a marketplace name.

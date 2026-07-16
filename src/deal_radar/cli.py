@@ -320,14 +320,14 @@ def build_parser() -> argparse.ArgumentParser:
         "repeatable, e.g. --item pc --item bike. Omit to scan all.",
     )
     p_run_once.add_argument(
-        "--limit", type=int, default=40, help="max listings to collect per marketplace (default 40)"
+        "--limit", type=int, default=200, help="max listings to collect per marketplace (default 200)"
     )
     p_run_once.add_argument(
         "--max-evals",
         dest="max_evals",
         type=int,
-        default=25,
-        help="max AI evaluations per item per run (default 25)",
+        default=100,
+        help="max AI evaluations per item per run (default 100)",
     )
     p_run_once.add_argument(
         "--dry-run", action="store_true", help="evaluate but do not send notifications"
@@ -347,14 +347,14 @@ def build_parser() -> argparse.ArgumentParser:
         "repeatable, e.g. --item pc --item bike. Omit to scan all.",
     )
     p_run.add_argument(
-        "--limit", type=int, default=40, help="max listings to collect per marketplace (default 40)"
+        "--limit", type=int, default=200, help="max listings to collect per marketplace (default 200)"
     )
     p_run.add_argument(
         "--max-evals",
         dest="max_evals",
         type=int,
-        default=25,
-        help="max AI evaluations per item per cycle (default 25)",
+        default=100,
+        help="max AI evaluations per item per cycle (default 100)",
     )
     p_run.add_argument(
         "--dry-run", action="store_true", help="evaluate but do not send notifications"

@@ -32,8 +32,8 @@ def build_jobs(
     config_path: str,
     *,
     headless: bool = True,
-    limit: int = 40,
-    max_evals: int = 25,
+    limit: int = 200,
+    max_evals: int = 100,
     dry_run: bool = False,
 ) -> tuple[Job, Job]:
     """Return (run_loop_job, run_once_job) bound to a config path, for the controller."""
