@@ -102,6 +102,59 @@ def create_app(
         rows.sort(key=lambda r: str(r.get("first_seen_ts") or ""), reverse=True)
         return {"rows": rows[:limit]}
 
+    @app.get("/api/seen/best")
+    def seen_best(limit: int = 5) -> dict[str, Any]:
+        """Best offers among everything already scanned: match, then rating, then price."""
+        from ..dedup.sqlite_store import SqliteSeenStore
+
+        db = paths.db_path()
+        if not db.is_file():
+            return {"rows": []}
+        with SqliteSeenStore(db) as store:
+            rows = store.list_seen()
+
+        def rank(r: dict[str, Any]) -> tuple[int, int, float]:
+            matched = r.get("matched") or 0
+            rating = r.get("rating") or 0
+            price = r.get("last_price")
+            # Higher match/rating first; among those, the cheapest asking price.
+            return (-int(matched), -int(rating), float(price) if price is not None else float("inf"))
+
+        rows.sort(key=rank)
+        return {"rows": rows[: max(1, limit)]}
+
+    @app.post("/api/seen/clear")
+    def seen_clear(item: str | None = None) -> dict[str, Any]:
+        from ..dedup.sqlite_store import SqliteSeenStore
+
+        db = paths.db_path()
+        if not db.is_file():
+            return {"ok": True, "deleted": 0}
+        with SqliteSeenStore(db) as store:
+            deleted = store.clear(item)
+        log.info("cleared %d seen listing(s)%s via web UI", deleted, f" for {item!r}" if item else "")
+        return {"ok": True, "deleted": deleted}
+
+    @app.post("/api/seen/delete")
+    async def seen_delete(request: Request) -> JSONResponse:
+        from ..dedup.sqlite_store import SqliteSeenStore
+
+        try:
+            body = json.loads((await request.body()) or b"{}")
+        except json.JSONDecodeError:
+            body = {}
+        item_name = str(body.get("item_name") or "")
+        listing_id = str(body.get("listing_id") or "")
+        if not item_name or not listing_id:
+            return JSONResponse(
+                {"ok": False, "error": "item_name and listing_id are required"}, status_code=400
+            )
+        db = paths.db_path()
+        if db.is_file():
+            with SqliteSeenStore(db) as store:
+                store.delete(item_name, listing_id)
+        return JSONResponse({"ok": True})
+
     @app.get("/api/drafts")
     def drafts(limit: int = 50) -> dict[str, Any]:
         db = paths.db_path()
@@ -247,8 +300,19 @@ _PAGE = """<!doctype html>
       <span id="savemsg"></span></div>
   </section>
   <section>
-    <h2>Recent listings</h2>
+    <h2>Recent listings
+      <button class="danger" style="float:right;font-size:11px;padding:2px 8px"
+              onclick="clearSeen()" title="Forget every scanned listing (they can be scanned again)">Clear all</button>
+    </h2>
+    <div id="seenmsg" class="muted" style="margin-bottom:6px"></div>
     <table><tbody id="seen"></tbody></table>
+  </section>
+  <section>
+    <h2>Best offers
+      <button style="float:right;font-size:11px;padding:2px 8px"
+              onclick="loadBest()" title="Rank everything scanned by match, rating, then price">Show best</button>
+    </h2>
+    <table><tbody id="best"><tr><td class="muted">Click “Show best” to rank scanned listings.</td></tr></tbody></table>
   </section>
   <section>
     <h2>Items</h2>
@@ -285,19 +349,45 @@ async function saveConfig() {
   if (j.ok) { msg.textContent = 'saved ✓ (applies on next scan start)'; msg.className = 'ok'; loadSummary(); }
   else { msg.textContent = 'invalid: ' + j.error.split('\\n')[0]; msg.className = 'err'; }
 }
-async function loadSeen() {
-  const j = await (await fetch('/api/seen')).json();
-  $('#seen').innerHTML = (j.rows || []).map(r =>
-    '<tr><td class="muted">' + (r.first_seen_ts
+const escAttr = s => String(s == null ? '' : s)
+  .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+function seenRow(r) {
+  return '<tr><td class="muted">' + (r.first_seen_ts
       ? new Date(r.first_seen_ts * 1000).toLocaleDateString(undefined, {month: 'short', day: 'numeric'})
       : '?') + '</td>' +
     '<td class="rate">' + (r.rating != null ? (r.rating * 2) + '/10'
       : '<span class="muted" title="not fully scraped / not evaluated">1/10</span>') + '</td>' +
     '<td>' + (r.last_price != null ? '$' + Math.round(r.last_price) : '?') + '</td>' +
     '<td>' + (r.images_analyzed ? '<span title="AI looked through the photos">📷</span> ' : '') +
+    (r.matched ? '<span title="matched" class="ok">★</span> ' : '') +
     '<a href="' + r.url + '" target="_blank" rel="noopener">' +
-    (r.title || r.listing_id).replace(/</g,'&lt;') + '</a></td></tr>').join('')
+    (r.title || r.listing_id).replace(/</g,'&lt;') + '</a></td>' +
+    '<td><button class="del danger" style="font-size:11px;padding:1px 6px" title="Delete (allows re-scan)" ' +
+    'data-item="' + escAttr(r.item_name) + '" data-id="' + escAttr(r.listing_id) + '">✕</button></td></tr>';
+}
+async function loadSeen() {
+  const j = await (await fetch('/api/seen')).json();
+  $('#seen').innerHTML = (j.rows || []).map(seenRow).join('')
     || '<tr><td class="muted">no listings recorded yet</td></tr>';
+}
+document.addEventListener('click', async e => {
+  const b = e.target.closest && e.target.closest('button.del');
+  if (!b) return;
+  await fetch('/api/seen/delete', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({item_name: b.dataset.item, listing_id: b.dataset.id})});
+  loadSeen();
+});
+async function clearSeen() {
+  if (!confirm('Clear ALL scanned listings? They can be found and scanned again.')) return;
+  const j = await (await fetch('/api/seen/clear', {method: 'POST'})).json();
+  $('#seenmsg').textContent = 'cleared ' + (j.deleted || 0) + ' listing(s)';
+  loadSeen();
+  $('#best').innerHTML = '<tr><td class="muted">Click “Show best” to rank scanned listings.</td></tr>';
+}
+async function loadBest() {
+  const j = await (await fetch('/api/seen/best?limit=8')).json();
+  $('#best').innerHTML = (j.rows || []).map(seenRow).join('')
+    || '<tr><td class="muted">nothing scanned yet</td></tr>';
 }
 async function loadSummary() {
   const j = await (await fetch('/api/config/summary')).json();

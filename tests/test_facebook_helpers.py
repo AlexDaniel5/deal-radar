@@ -212,3 +212,14 @@ def test_card_relevance_drops_facebook_padding() -> None:
 
 def test_card_relevance_passes_through_when_no_tokens() -> None:
     assert _card_is_relevant("anything at all", set())
+
+
+def test_card_relevance_drops_piece_sets() -> None:
+    # "N pc"/"N pcs" abbreviates "piece" (furniture), not PC — must be dropped.
+    tokens = _relevance_tokens(_pc_item())
+    assert not _card_is_relevant("7 pc dining table set delivery available", tokens)
+    assert not _card_is_relevant("3 pc sofa set delivery available", tokens)
+    assert not _card_is_relevant("10pcs cookware set", tokens)
+    # But a real "gaming pc" (no digit before pc) is still kept.
+    assert _card_is_relevant("Gaming PC in great condition", tokens)
+    assert _card_is_relevant("RTX 3080 Gaming PC", tokens)

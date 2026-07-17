@@ -227,6 +227,9 @@ def _parse_card_text(text: str) -> tuple[float | None, str, str | None]:
 
 
 _WORD_RE = re.compile(r"[a-z0-9]+")
+# "7 pc", "3 pcs" etc. abbreviate "piece" (furniture sets), not "PC". Drop that
+# pattern before matching so a dining/sofa set doesn't collide with the pc token.
+_PIECE_RE = re.compile(r"\b\d+\s*pcs?\b")
 
 
 def _relevance_tokens(item: ItemConfig) -> set[str]:
@@ -247,10 +250,17 @@ def _relevance_tokens(item: ItemConfig) -> set[str]:
 
 
 def _card_is_relevant(text: str, tokens: set[str]) -> bool:
-    """True if the card text shares any query word (or there is nothing to gate on)."""
+    """True if the card text shares any query word (or there is nothing to gate on).
+
+    The "<number> pc/pcs" piece pattern is stripped first so furniture sets
+    ("7 pc dining table set") don't match the ``pc`` token. Rarer collisions
+    (e.g. "CD Computer Games" via ``computer``/``gaming``) are left to the AI,
+    which rates them low and never notifies.
+    """
     if not tokens:
         return True
-    return not set(_WORD_RE.findall(text.lower())).isdisjoint(tokens)
+    cleaned = _PIECE_RE.sub(" ", text.lower())
+    return not set(_WORD_RE.findall(cleaned)).isdisjoint(tokens)
 
 
 def build_search_url(query: str, item: ItemConfig, marketplace: MarketplaceConfig) -> str:

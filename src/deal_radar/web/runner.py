@@ -20,7 +20,7 @@ from ..marketplaces.base import Marketplace
 from ..marketplaces.registry import build_marketplace
 from ..messaging.drafter import open_drafter
 from ..notifiers.registry import build_notifier
-from ..pipeline import scan_all
+from ..pipeline import ScanStats, format_stats, scan_all
 from ..ratelimit import RateLimiter
 from ..scheduler import run_loop
 from .controller import Job
@@ -58,6 +58,12 @@ def build_jobs(
         with SqliteSeenStore(paths.db_path()) as store, open_drafter(cfg) as drafter:
 
             def scan() -> None:
+                collected: list[ScanStats] = []
+
+                def on_stats(s: ScanStats) -> None:
+                    collected.append(s)
+                    log.info("%s", format_stats(s))
+
                 scan_all(
                     cfg=cfg,
                     items=items,
@@ -68,8 +74,17 @@ def build_jobs(
                     drafter=drafter,
                     max_evaluations=max_evals,
                     dry_run=dry_run,
+                    on_stats=on_stats,
                     should_stop=stop.is_set,
                 )
+                # Everything found was already in the seen store: nothing new to judge.
+                if collected and all(s.evaluated == 0 and s.found > 0 for s in collected):
+                    total = sum(s.found for s in collected)
+                    log.info(
+                        "all current listings already scanned — nothing new this run "
+                        "(%d listings, all already seen)",
+                        total,
+                    )
 
             if loop:
                 run_loop(scan=scan, schedule=cfg.schedule, sleep=_sleep, should_stop=stop.is_set)

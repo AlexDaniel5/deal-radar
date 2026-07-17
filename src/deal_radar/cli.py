@@ -14,7 +14,7 @@ from .config.loader import load_config, load_dotenv_if_present
 from .config.schema import AppConfig, ItemConfig, MarketplaceConfig
 from .errors import ConfigError, DealRadarError
 from .logging import configure_logging, get_logger
-from .pipeline import ScanStats
+from .pipeline import ScanStats, format_stats
 
 if TYPE_CHECKING:
     from .marketplaces.base import Marketplace
@@ -54,12 +54,7 @@ def _graceful_sigint() -> Iterator[None]:
 
 
 def _print_stats(stats: ScanStats) -> None:
-    print(
-        f"  {stats.item}: found={stats.found} new_seen_skipped={stats.skipped_seen} "
-        f"filtered={stats.skipped_filter} evaluated={stats.evaluated} "
-        f"matched={stats.matched} drafted={stats.drafted} notified={stats.notified} "
-        f"errors={stats.errors}"
-    )
+    print(f"  {format_stats(stats)}")
 
 
 def _select_items(cfg: AppConfig, patterns: Sequence[str] | None) -> list[ItemConfig]:

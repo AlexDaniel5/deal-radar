@@ -90,6 +90,26 @@ class SqliteSeenStore:
         )
         self._conn.commit()
 
+    def clear(self, item_name: str | None = None) -> int:
+        """Forget seen listings so they can be scanned again; return rows removed.
+
+        Pass ``item_name`` to clear one item only, or omit it to wipe the store.
+        """
+        if item_name is None:
+            cur = self._conn.execute("DELETE FROM seen")
+        else:
+            cur = self._conn.execute("DELETE FROM seen WHERE item_name = ?", (item_name,))
+        self._conn.commit()
+        return cur.rowcount
+
+    def delete(self, item_name: str, listing_id: str) -> None:
+        """Forget one seen listing (composite key) so it can be scanned again."""
+        self._conn.execute(
+            "DELETE FROM seen WHERE item_name = ? AND listing_id = ?",
+            (item_name, listing_id),
+        )
+        self._conn.commit()
+
     def last_price(self, item_name: str, listing_id: str) -> float | None:
         cur = self._conn.execute(
             "SELECT last_price FROM seen WHERE item_name = ? AND listing_id = ?",

@@ -12,10 +12,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from deal_radar import paths
+from deal_radar.dedup.sqlite_store import SqliteSeenStore
 from deal_radar.errors import SendError
 from deal_radar.logging import LogBuffer
 from deal_radar.messaging.store import SqliteDraftStore
-from deal_radar.models import Listing
+from deal_radar.models import Evaluation, Listing
 from deal_radar.web.app import create_app
 from deal_radar.web.controller import ScannerController
 from deal_radar.web.sender import MessageSender
@@ -153,6 +154,75 @@ def test_scanner_start_stop_endpoints(tmp_path: Path) -> None:
     assert client.post("/api/scanner/start", params={"mode": "loop"}).json()["started"] is False
     client.post("/api/scanner/stop")
     assert _wait(lambda: not ctl.is_running())
+
+
+# --- Seen store endpoints -------------------------------------------------------
+
+
+def _seen_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    monkeypatch.setenv("DEAL_RADAR_DATA_DIR", str(tmp_path / "data"))
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(VALID_CONFIG)
+    app = create_app(
+        config_path=str(cfg),
+        controller=ScannerController(_block_until_stop, lambda s: None),
+        log_buffer=LogBuffer(),
+    )
+    return TestClient(app)
+
+
+def _seed_seen() -> None:
+    def li(i: str, price: float) -> Listing:
+        return Listing(id=i, marketplace="facebook", title=f"PC {i}", url=f"u/{i}", price=price)
+
+    with SqliteSeenStore(paths.db_path()) as store:
+        store.mark_seen("PC", li("1", 1500.0), Evaluation(match=True, rating=5, rationale="x", model="m"))
+        store.mark_seen("PC", li("2", 1200.0), Evaluation(match=True, rating=5, rationale="x", model="m"))
+        store.mark_seen("PC", li("3", 800.0), Evaluation(match=False, rating=2, rationale="x", model="m"))
+        store.mark_seen("Bike", li("4", 400.0))
+
+
+def test_seen_best_ranks_match_then_rating_then_price(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _seen_client(tmp_path, monkeypatch)
+    _seed_seen()
+    rows = client.get("/api/seen/best", params={"limit": 3}).json()["rows"]
+    # Two 5/5 matches first, cheaper one ahead; the 2/5 non-match trails.
+    assert [r["listing_id"] for r in rows] == ["2", "1", "3"]
+
+
+def test_seen_delete_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _seen_client(tmp_path, monkeypatch)
+    _seed_seen()
+    resp = client.post("/api/seen/delete", json={"item_name": "PC", "listing_id": "1"})
+    assert resp.status_code == 200 and resp.json()["ok"] is True
+    with SqliteSeenStore(paths.db_path()) as store:
+        assert not store.is_seen("PC", "1")
+        assert store.is_seen("PC", "2")
+
+
+def test_seen_delete_requires_both_keys(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _seen_client(tmp_path, monkeypatch)
+    _seed_seen()
+    assert client.post("/api/seen/delete", json={"item_name": "PC"}).status_code == 400
+
+
+def test_seen_clear_by_item(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _seen_client(tmp_path, monkeypatch)
+    _seed_seen()
+    resp = client.post("/api/seen/clear", params={"item": "PC"})
+    assert resp.json() == {"ok": True, "deleted": 3}
+    with SqliteSeenStore(paths.db_path()) as store:
+        assert store.is_seen("Bike", "4")  # other item survives
+
+
+def test_seen_clear_all(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _seen_client(tmp_path, monkeypatch)
+    _seed_seen()
+    resp = client.post("/api/seen/clear")
+    assert resp.json() == {"ok": True, "deleted": 4}
+    assert client.get("/api/seen").json()["rows"] == []
 
 
 # --- MessageSender ------------------------------------------------------------

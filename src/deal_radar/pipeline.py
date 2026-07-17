@@ -32,6 +32,16 @@ class ScanStats:
     errors: int = 0
 
 
+def format_stats(stats: ScanStats) -> str:
+    """One-line human summary of an item scan, shared by the CLI and web runner."""
+    return (
+        f"{stats.item}: found={stats.found} new_seen_skipped={stats.skipped_seen} "
+        f"filtered={stats.skipped_filter} evaluated={stats.evaluated} "
+        f"matched={stats.matched} drafted={stats.drafted} notified={stats.notified} "
+        f"errors={stats.errors}"
+    )
+
+
 def passes_keyword_filters(listing: Listing, item: ItemConfig) -> bool:
     """Hard-filter a listing on exclude_keywords only.
 

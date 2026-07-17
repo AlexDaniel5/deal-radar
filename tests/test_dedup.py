@@ -60,3 +60,31 @@ def test_scoped_by_item(tmp_path: Path) -> None:
         store.mark_seen("A", _listing("1"))
         assert store.is_seen("A", "1")
         assert not store.is_seen("B", "1")
+
+
+def test_clear_all(tmp_path: Path) -> None:
+    with SqliteSeenStore(tmp_path / "s.db") as store:
+        store.mark_seen("A", _listing("1"))
+        store.mark_seen("B", _listing("2"))
+        assert store.clear() == 2
+        assert not store.is_seen("A", "1")
+        assert not store.is_seen("B", "2")
+
+
+def test_clear_one_item(tmp_path: Path) -> None:
+    with SqliteSeenStore(tmp_path / "s.db") as store:
+        store.mark_seen("A", _listing("1"))
+        store.mark_seen("B", _listing("2"))
+        assert store.clear("A") == 1
+        assert not store.is_seen("A", "1")
+        assert store.is_seen("B", "2")  # other item untouched
+
+
+def test_delete_one_listing(tmp_path: Path) -> None:
+    with SqliteSeenStore(tmp_path / "s.db") as store:
+        store.mark_seen("A", _listing("1"))
+        store.mark_seen("A", _listing("2"))
+        store.delete("A", "1")
+        assert not store.is_seen("A", "1")
+        assert store.is_seen("A", "2")
+        store.delete("A", "nope")  # deleting a missing row is a no-op
