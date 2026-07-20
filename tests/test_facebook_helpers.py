@@ -13,6 +13,7 @@ from deal_radar.marketplaces.facebook import (
     _parse_card_text,
     _parse_price,
     _pick_detail_text,
+    _prefer_detail_text,
     _relevance_tokens,
     build_search_url,
 )
@@ -212,6 +213,18 @@ def test_card_relevance_drops_facebook_padding() -> None:
 
 def test_card_relevance_passes_through_when_no_tokens() -> None:
     assert _card_is_relevant("anything at all", set())
+
+
+def test_prefer_detail_text_over_title() -> None:
+    title = "RTX 3080 | Ryzen 5 5600x | 32gb Ram | 1tb M.2 Ssd"
+    # A real body shorter than the whole card blob but longer than the title wins.
+    assert _prefer_detail_text("Selling my build. " + "DDR5, 850W PSU, warranty. " * 3, title)
+    # A spec-rich title no longer causes a genuine body to be discarded.
+    assert _prefer_detail_text("Great condition, pickup in Toronto, comes with box and cables", title)
+    # But an empty / stub extraction does not replace the card text.
+    assert not _prefer_detail_text("", title)
+    assert not _prefer_detail_text("   ", title)
+    assert not _prefer_detail_text("RTX 3080", title)
 
 
 def test_card_relevance_drops_piece_sets() -> None:

@@ -249,6 +249,19 @@ def _relevance_tokens(item: ItemConfig) -> set[str]:
     return tokens
 
 
+def _prefer_detail_text(detail: str, title: str) -> bool:
+    """Whether a fetched detail body should replace the sparse card text.
+
+    The card ``description`` is mostly just the title again (title + price +
+    location), and the AI is already shown the title on its own line. So the real
+    body should win whenever it adds anything beyond the title — comparing against
+    the *title* rather than the whole card blob stops a spec-rich title from
+    causing a shorter-but-real description to be discarded (which left the AI
+    judging on the title alone).
+    """
+    return len(detail.strip()) > len(title.strip())
+
+
 def _card_is_relevant(text: str, tokens: set[str]) -> bool:
     """True if the card text shares any query word (or there is nothing to gate on).
 
@@ -531,8 +544,9 @@ class FacebookMarketplace:
         if images:
             log.debug("detail id=%s images=%d first=%r", listing.id, len(images), images[0][:120])
             updates["image_urls"] = images
-        # Only replace when the detail page genuinely adds text over the card.
-        if len(text) > len(listing.description):
+        # Use the detail body whenever it adds anything beyond the title (which the
+        # AI already sees separately) — not just when it beats the whole card blob.
+        if _prefer_detail_text(text, listing.title):
             log.debug("detail id=%s text[%d]=%r", listing.id, len(text), text[:300])
             updates["description"] = text
         else:
