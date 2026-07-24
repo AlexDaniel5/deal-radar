@@ -11,7 +11,7 @@ from .dedup.base import SeenStore
 from .logging import get_logger
 from .marketplaces.base import Marketplace, SearchContext
 from .messaging.drafter import Drafter
-from .models import Listing, NotificationEvent
+from .models import Evaluation, Listing, NotificationEvent
 from .notifiers.base import Notifier
 
 log = get_logger("pipeline")
@@ -30,6 +30,17 @@ class ScanStats:
     drafted: int = 0
     notified: int = 0
     errors: int = 0
+
+
+def _rank_key(pair: tuple[Listing, Evaluation]) -> tuple[int, float]:
+    """Best-first sort key: highest rating first, then cheapest known price.
+
+    Unknown prices sort last within a rating so a listing with a real (low)
+    price is preferred over one whose price the card never exposed.
+    """
+    listing, evaluation = pair
+    price = listing.price if listing.price is not None else float("inf")
+    return (-evaluation.rating, price)
 
 
 def format_stats(stats: ScanStats) -> str:
@@ -78,12 +89,20 @@ def scan_item(
     ai: AIConfig,
     drafter: Drafter | None = None,
     max_evaluations: int | None = None,
+    notify_top_n: int = 5,
     dry_run: bool = False,
     should_stop: Callable[[], bool] | None = None,
 ) -> ScanStats:
-    """Scan one item on one marketplace and notify on good new matches."""
+    """Scan one item on one marketplace and notify on the best new matches.
+
+    Every qualifying listing (a match at or above the rating threshold) is
+    collected during the pass; once the whole feed has been scanned they are
+    ranked best-first and only the top ``notify_top_n`` are sent, as a single
+    ranked digest per notifier rather than one alert per match.
+    """
     stats = ScanStats(item=item.name)
     threshold = item.effective_min_rating(ai)
+    matches: list[tuple[Listing, Evaluation]] = []
 
     for listing in marketplace.search(item, ctx):
         if should_stop is not None and should_stop():
@@ -129,8 +148,46 @@ def scan_item(
             listing.title,
             listing.url,
         )
-        if dry_run:
-            continue
+        matches.append((listing, evaluation))
+
+    _notify_best(
+        item=item,
+        matches=matches,
+        notifiers=notifiers,
+        drafter=drafter,
+        notify_top_n=notify_top_n,
+        dry_run=dry_run,
+        stats=stats,
+    )
+    return stats
+
+
+def _notify_best(
+    *,
+    item: ItemConfig,
+    matches: list[tuple[Listing, Evaluation]],
+    notifiers: Sequence[Notifier],
+    drafter: Drafter | None,
+    notify_top_n: int,
+    dry_run: bool,
+    stats: ScanStats,
+) -> None:
+    """Rank the pass's matches and send the top ``notify_top_n`` as one digest."""
+    if not matches:
+        return
+    matches.sort(key=_rank_key)
+    top = matches[:notify_top_n]
+    log.info(
+        "%s: %d match(es) this pass; notifying top %d",
+        item.name,
+        len(matches),
+        len(top),
+    )
+    if dry_run:
+        return
+
+    events: list[NotificationEvent] = []
+    for listing, evaluation in top:
         draft_pending = False
         if drafter is not None:
             try:
@@ -140,21 +197,22 @@ def scan_item(
             except Exception as exc:  # noqa: BLE001 - a failed draft shouldn't kill the scan
                 stats.errors += 1
                 log.warning("drafting a seller message for %s failed: %s", listing.id, exc)
-        event = NotificationEvent(
-            item_name=item.name,
-            listing=listing,
-            evaluation=evaluation,
-            draft_pending=draft_pending,
+        events.append(
+            NotificationEvent(
+                item_name=item.name,
+                listing=listing,
+                evaluation=evaluation,
+                draft_pending=draft_pending,
+            )
         )
-        for notifier in notifiers:
-            try:
-                notifier.notify(event)
-                stats.notified += 1
-            except Exception as exc:  # noqa: BLE001 - one failed notifier shouldn't kill the scan
-                stats.errors += 1
-                log.warning("notify via %s failed: %s", notifier.type, exc)
 
-    return stats
+    for notifier in notifiers:
+        try:
+            notifier.notify_digest(item.name, events)
+            stats.notified += len(events)
+        except Exception as exc:  # noqa: BLE001 - one failed notifier shouldn't kill the scan
+            stats.errors += 1
+            log.warning("notify via %s failed: %s", notifier.type, exc)
 
 
 def scan_all(
@@ -208,6 +266,7 @@ def scan_all(
                     ai=cfg.ai,
                     drafter=drafter,
                     max_evaluations=max_evaluations,
+                    notify_top_n=cfg.notify_top_n,
                     dry_run=dry_run,
                     should_stop=should_stop,
                 )

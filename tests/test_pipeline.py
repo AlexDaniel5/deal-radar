@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import replace
 from typing import Any
 
@@ -72,9 +72,14 @@ class FakeNotifier:
 
     def __init__(self) -> None:
         self.events: list[NotificationEvent] = []
+        self.digests: list[list[NotificationEvent]] = []
 
     def notify(self, event: NotificationEvent) -> None:
         self.events.append(event)
+
+    def notify_digest(self, item_name: str, events: Sequence[NotificationEvent]) -> None:
+        self.digests.append(list(events))
+        self.events.extend(events)  # keep single-event assertions working
 
 
 def _item(**kw: Any) -> ItemConfig:
@@ -118,6 +123,52 @@ def test_match_notifies() -> None:
     assert stats.notified == 1
     assert len(notifier.events) == 1
     assert store.is_seen("PC", "1")
+
+
+def test_matches_sent_as_one_ranked_digest() -> None:
+    # Three matches, different ratings/prices: one digest, best-first.
+    listings = [
+        _listing("a", price=900.0),  # rating 4
+        _listing("b", price=700.0),  # rating 5
+        _listing("c", price=500.0),  # rating 5, cheaper -> should rank #1
+    ]
+    ev = FakeEval({"a": _good(rating=4), "b": _good(rating=5), "c": _good(rating=5)})
+    notifier = FakeNotifier()
+    stats = scan_item(
+        item=_item(),
+        marketplace=FakeMarket(listings),
+        ctx=_ctx(),
+        evaluator=ev,
+        store=FakeStore(),
+        notifiers=[notifier],
+        ai=AI,
+    )
+    assert stats.matched == 3
+    assert stats.notified == 3
+    assert len(notifier.digests) == 1  # a single digest, not three alerts
+    ranked = [e.listing.id for e in notifier.digests[0]]
+    assert ranked == ["c", "b", "a"]  # rating desc, then cheapest price
+
+
+def test_digest_capped_at_notify_top_n() -> None:
+    listings = [_listing(str(i), price=float(100 + i)) for i in range(8)]
+    ev = FakeEval({str(i): _good(rating=5) for i in range(8)})
+    notifier = FakeNotifier()
+    stats = scan_item(
+        item=_item(),
+        marketplace=FakeMarket(listings),
+        ctx=_ctx(),
+        evaluator=ev,
+        store=FakeStore(),
+        notifiers=[notifier],
+        ai=AI,
+        notify_top_n=5,
+    )
+    assert stats.matched == 8  # all matched
+    assert stats.notified == 5  # but only the best 5 were sent
+    assert len(notifier.digests[0]) == 5
+    # Cheapest five (equal rating) win.
+    assert [e.listing.id for e in notifier.digests[0]] == ["0", "1", "2", "3", "4"]
 
 
 def test_below_threshold_not_notified() -> None:

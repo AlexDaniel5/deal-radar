@@ -145,6 +145,11 @@ class AppConfig(BaseModel):
 
     version: int = 1
     ai: AIConfig = Field(default_factory=AIConfig)
+    notify_top_n: int = Field(
+        5,
+        ge=1,
+        description="Per scan, notify only the best N matches per item as one ranked digest.",
+    )
     marketplaces: dict[str, MarketplaceConfig] = Field(default_factory=dict)
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
     messaging: MessagingConfig = Field(default_factory=MessagingConfig)
