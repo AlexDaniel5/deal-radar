@@ -355,8 +355,8 @@ function seenRow(r) {
   return '<tr><td class="muted">' + (r.first_seen_ts
       ? new Date(r.first_seen_ts * 1000).toLocaleDateString(undefined, {month: 'short', day: 'numeric'})
       : '?') + '</td>' +
-    '<td class="rate">' + (r.rating != null ? (r.rating * 2) + '/10'
-      : '<span class="muted" title="not fully scraped / not evaluated">1/10</span>') + '</td>' +
+    '<td class="rate">' + (r.rating != null ? r.rating + '/5'
+      : '<span class="muted" title="not fully scraped / not evaluated">–/5</span>') + '</td>' +
     '<td>' + (r.last_price != null ? '$' + Math.round(r.last_price) : '?') + '</td>' +
     '<td>' + (r.images_analyzed ? '<span title="AI looked through the photos">📷</span> ' : '') +
     (r.matched ? '<span title="matched" class="ok">★</span> ' : '') +
