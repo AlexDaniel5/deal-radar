@@ -28,6 +28,9 @@ deal-radar = "deal_radar.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/deal_radar"]
+# The web UI's HTML/CSS/JS are package data, not Python. hatchling ships them
+# anyway, but state it so a future .gitignore rule can't silently drop them.
+artifacts = ["src/deal_radar/web/static/**"]
 
 [tool.ruff]
 line-length = 100
@@ -36,10 +39,6 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
-
-[tool.ruff.lint.per-file-ignores]
-# app.py embeds the web UI's HTML/CSS/JS as a string literal with long lines.
-"src/deal_radar/web/app.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.11"

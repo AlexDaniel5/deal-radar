@@ -100,6 +100,15 @@ def _marketplace_factory(
     return make
 
 
+def _scan_limits(cfg: AppConfig, args: argparse.Namespace) -> tuple[int, int]:
+    """(max_listings, max_evaluations) — CLI flags override the config's ``scan:`` block."""
+    limit = args.limit if args.limit is not None else cfg.scan.max_listings_per_search
+    max_evals = (
+        args.max_evals if args.max_evals is not None else cfg.scan.max_evaluations_per_item
+    )
+    return limit, max_evals
+
+
 def _cmd_validate(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     print(f"OK: {args.config}")
@@ -146,9 +155,10 @@ def _cmd_run_once(args: argparse.Namespace) -> int:
     items = _select_items(cfg, args.item)
     paths.ensure_data_dir()
 
+    limit, max_evals = _scan_limits(cfg, args)
     evaluator = ClaudeEvaluator(cfg.ai)
     notifiers = [build_notifier(n) for n in cfg.notifiers]
-    make_marketplace = _marketplace_factory(cfg, headless=not args.headful, max_results=args.limit)
+    make_marketplace = _marketplace_factory(cfg, headless=not args.headful, max_results=limit)
 
     print(f"run-once: {len(items)} item(s), dry_run={args.dry_run}")
     with (
@@ -164,7 +174,7 @@ def _cmd_run_once(args: argparse.Namespace) -> int:
             store=store,
             notifiers=notifiers,
             drafter=drafter,
-            max_evaluations=args.max_evals,
+            max_evaluations=max_evals,
             dry_run=args.dry_run,
             on_stats=_print_stats,
         )
@@ -186,9 +196,10 @@ def _cmd_run(args: argparse.Namespace) -> int:
     items = _select_items(cfg, args.item)
     paths.ensure_data_dir()
 
+    limit, max_evals = _scan_limits(cfg, args)
     evaluator = ClaudeEvaluator(cfg.ai)
     notifiers = [build_notifier(n) for n in cfg.notifiers]
-    make_marketplace = _marketplace_factory(cfg, headless=not args.headful, max_results=args.limit)
+    make_marketplace = _marketplace_factory(cfg, headless=not args.headful, max_results=limit)
 
     sched = cfg.schedule
     print(
@@ -210,7 +221,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 store=store,
                 notifiers=notifiers,
                 drafter=drafter,
-                max_evaluations=args.max_evals,
+                max_evaluations=max_evals,
                 dry_run=args.dry_run,
                 on_stats=_print_stats,
             )
@@ -233,7 +244,22 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     load_config(args.config)  # fail fast on a broken config before starting the server
     app = create_app(config_path=args.config)
     print(f"deal-radar web UI at http://{args.host}:{args.port}  (config: {args.config})")
-    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+    if args.host not in ("127.0.0.1", "localhost", "::1"):
+        print(
+            f"  WARNING: listening on {args.host}, not just this computer. There is no "
+            "password — anyone who can reach this address can read your settings, "
+            "start scans that cost money, and message sellers as you."
+        )
+    uvicorn.run(
+        app,
+        host=args.host,
+        port=args.port,
+        log_level="warning",
+        # The live-log stream holds a connection open for as long as the page
+        # is in a browser, and a graceful shutdown waits for open connections —
+        # so without a bound, Ctrl-C simply never returns while the UI is open.
+        timeout_graceful_shutdown=3,
+    )
     return 0
 
 
@@ -256,6 +282,84 @@ def _cmd_login(args: argparse.Namespace) -> int:
 
     path = capture_session(mk_cfg, wait_for_login=wait_for_login)
     print(f"saved session: {path}")
+    return 0
+
+
+_STATE_MARK = {"ok": "[ ok ]", "warn": "[warn]", "fail": "[FAIL]", "unknown": "[ ?  ]"}
+
+
+def _cmd_doctor(args: argparse.Namespace) -> int:
+    """Print the same readiness checks the web wizard shows.
+
+    This is what a technical helper reaches for when someone says "it isn't
+    working" — same source of truth as the browser, no browser required.
+    """
+    from .web import preflight
+    from .web.setup import read_state
+
+    state = read_state()
+    checks = preflight.all_checks(
+        args.config,
+        key_verified_ts=state.get("key_verified_ts"),
+        facebook_checked=(
+            {"ok": state.get("fb_checked_ok"), "ts": state.get("fb_checked_ts")}
+            if state.get("fb_checked_ts")
+            else None
+        ),
+    )
+    for check in checks:
+        print(f"{_STATE_MARK.get(check.state, '[ ?  ]')} {check.label}: {check.detail}")
+        if check.fix:
+            print(f"        → {check.fix}")
+        if check.copyable:
+            print(f"          {check.copyable}")
+    blocking = [c for c in checks if c.blocking and c.state == "fail"]
+    print()
+    if blocking:
+        print(f"{len(blocking)} thing(s) must be fixed before a scan can work.")
+        return 1
+    print("Ready to scan.")
+    return 0
+
+
+def _cmd_test_notify(args: argparse.Namespace) -> int:
+    """Send one obviously-fake alert, to prove notifications actually arrive."""
+    from .web.setup import SetupError, send_test_notification
+
+    cfg = load_config(args.config)
+    try:
+        result = send_test_notification(cfg)
+    except SetupError as exc:
+        raise DealRadarError(str(exc)) from exc
+    print(result["message"])
+    for warning in result.get("warnings", []):
+        print(f"  note: {warning}")
+    return 0
+
+
+def _cmd_setup(args: argparse.Namespace) -> int:
+    """One-time install of the browser deal-radar drives.
+
+    Deliberately a CLI command rather than a button in the web UI: on Linux
+    this often needs `playwright install-deps` too, which needs sudo, so a
+    one-click promise in the browser would break exactly where the user
+    couldn't recover.
+    """
+    import subprocess
+    import sys
+
+    print("Downloading the browser deal-radar uses (about 150 MB, one time)…")
+    result = subprocess.run(  # noqa: S603 - fixed argv, no shell
+        [sys.executable, "-m", "playwright", "install", "chromium"], check=False
+    )
+    if result.returncode != 0:
+        print(
+            "\nThat didn't work. On Linux you may also need:\n"
+            f"  {sys.executable} -m playwright install-deps chromium\n"
+            "which usually needs sudo."
+        )
+        return result.returncode
+    print("\nDone. Now run:  deal-radar serve")
     return 0
 
 
@@ -315,14 +419,19 @@ def build_parser() -> argparse.ArgumentParser:
         "repeatable, e.g. --item pc --item bike. Omit to scan all.",
     )
     p_run_once.add_argument(
-        "--limit", type=int, default=200, help="max listings to collect per marketplace (default 200)"
+        "--limit",
+        type=int,
+        default=None,
+        help="max listings to collect per marketplace (default: the scan.max_listings_per_search "
+        "setting in your config)",
     )
     p_run_once.add_argument(
         "--max-evals",
         dest="max_evals",
         type=int,
-        default=100,
-        help="max AI evaluations per item per run (default 100)",
+        default=None,
+        help="max AI evaluations per item per run (default: the "
+        "scan.max_evaluations_per_item setting in your config)",
     )
     p_run_once.add_argument(
         "--dry-run", action="store_true", help="evaluate but do not send notifications"
@@ -342,14 +451,19 @@ def build_parser() -> argparse.ArgumentParser:
         "repeatable, e.g. --item pc --item bike. Omit to scan all.",
     )
     p_run.add_argument(
-        "--limit", type=int, default=200, help="max listings to collect per marketplace (default 200)"
+        "--limit",
+        type=int,
+        default=None,
+        help="max listings to collect per marketplace (default: the scan.max_listings_per_search "
+        "setting in your config)",
     )
     p_run.add_argument(
         "--max-evals",
         dest="max_evals",
         type=int,
-        default=100,
-        help="max AI evaluations per item per cycle (default 100)",
+        default=None,
+        help="max AI evaluations per item per cycle (default: the "
+        "scan.max_evaluations_per_item setting in your config)",
     )
     p_run.add_argument(
         "--dry-run", action="store_true", help="evaluate but do not send notifications"
@@ -374,6 +488,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_login = with_config("login", "log in once and save a browser session")
     p_login.add_argument("marketplace", nargs="?", default="facebook", help="marketplace to log in")
     p_login.set_defaults(func=_cmd_login)
+
+    p_doctor = with_config("doctor", "check whether deal-radar is ready to scan")
+    p_doctor.set_defaults(func=_cmd_doctor)
+
+    p_notify = with_config("test-notify", "send one test alert to prove notifications work")
+    p_notify.set_defaults(func=_cmd_test_notify)
+
+    p_setup = sub.add_parser("setup", help="download the browser deal-radar needs")
+    p_setup.set_defaults(func=_cmd_setup)
 
     p_list = with_config("list-seen", "list previously seen listings")
     p_list.add_argument("--item", default=None, help="only this item")

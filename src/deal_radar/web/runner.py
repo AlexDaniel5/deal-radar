@@ -12,6 +12,7 @@ import threading
 
 from .. import paths
 from ..ai.claude import ClaudeEvaluator
+from ..ai.pricing import METER
 from ..config.loader import load_config
 from ..config.schema import MarketplaceConfig
 from ..dedup.sqlite_store import SqliteSeenStore
@@ -32,15 +33,24 @@ def build_jobs(
     config_path: str,
     *,
     headless: bool = True,
-    limit: int = 200,
-    max_evals: int = 100,
+    limit: int | None = None,
+    max_evals: int | None = None,
     dry_run: bool = False,
 ) -> tuple[Job, Job]:
-    """Return (run_loop_job, run_once_job) bound to a config path, for the controller."""
+    """Return (run_loop_job, run_once_job) bound to a config path, for the controller.
+
+    ``limit`` and ``max_evals`` are *overrides*: left as None they come from the
+    config's ``scan:`` block, which is read at job start so the value applies to
+    the polling loop as well as a one-off scan.
+    """
 
     def _run(stop: threading.Event, *, loop: bool) -> None:
         cfg = load_config(config_path)  # reload so UI edits apply on restart
         paths.ensure_data_dir()
+        effective_limit = limit if limit is not None else cfg.scan.max_listings_per_search
+        effective_max_evals = (
+            max_evals if max_evals is not None else cfg.scan.max_evaluations_per_item
+        )
         evaluator = ClaudeEvaluator(cfg.ai)
         notifiers = [build_notifier(n) for n in cfg.notifiers]
         interval = cfg.schedule.per_request_min_interval_seconds
@@ -49,7 +59,7 @@ def build_jobs(
 
         def make_mk(name: str, mk_cfg: MarketplaceConfig) -> Marketplace:
             return build_marketplace(
-                name, mk_cfg, headless=headless, max_results=limit, pause=pause
+                name, mk_cfg, headless=headless, max_results=effective_limit, pause=pause
             )
 
         def _sleep(delay: float) -> None:
@@ -58,6 +68,9 @@ def build_jobs(
         with SqliteSeenStore(paths.db_path()) as store, open_drafter(cfg) as drafter:
 
             def scan() -> None:
+                # Reset per-scan spend here, not once per job: a polling loop
+                # runs many scans and the UI shows "spent this scan".
+                METER.start_scan()
                 collected: list[ScanStats] = []
 
                 def on_stats(s: ScanStats) -> None:
@@ -72,7 +85,7 @@ def build_jobs(
                     store=store,
                     notifiers=notifiers,
                     drafter=drafter,
-                    max_evaluations=max_evals,
+                    max_evaluations=effective_max_evals,
                     dry_run=dry_run,
                     on_stats=on_stats,
                     should_stop=stop.is_set,
@@ -100,3 +113,20 @@ def build_jobs(
         _run(stop, loop=False)
 
     return run_loop_job, run_once_job
+
+
+def build_free_scan_job(config_path: str) -> Job:
+    """A scan that costs nothing: no AI calls, no detail-page fetches.
+
+    ``max_evaluations=0`` short-circuits the pipeline before either. It is the
+    right first thing for a new user to press — it proves the browser works and
+    the Facebook sign-in is live, and it cannot spend a cent.
+    """
+    _, once = build_jobs(config_path, max_evals=0)
+
+    def job(stop: threading.Event) -> None:
+        log.info("free test scan starting — no AI calls will be made")
+        once(stop)
+        log.info("free test scan complete (nothing was charged)")
+
+    return job

@@ -11,6 +11,7 @@ from ..config.schema import AIConfig, ItemConfig
 from ..errors import EvalError
 from ..logging import get_logger
 from ..models import Evaluation, Listing
+from .pricing import METER
 from .prompt import SYSTEM, Verdict, build_user_prompt
 
 log = get_logger("ai.claude")
@@ -46,15 +47,6 @@ def _fetch_image(url: str) -> tuple[bytes, str] | None:
         log.debug("photo skipped (type=%s size=%d): %s", media_type, len(resp.content), url[:120])
         return None
     return resp.content, media_type
-
-
-# Per-1M-token (input, output) USD prices for usage/cost logging. Estimates only;
-# unknown models fall back to logging raw token counts without a dollar figure.
-_PRICE_PER_MTOK: dict[str, tuple[float, float]] = {
-    "claude-haiku-4-5": (1.0, 5.0),
-    "claude-sonnet-4-6": (3.0, 15.0),
-    "claude-opus-4-8": (5.0, 25.0),
-}
 
 
 def _build_content(
@@ -106,17 +98,21 @@ def _build_content(
 
 
 def _log_usage(model: str, usage: object) -> None:
-    """Log token usage (and an estimated cost when the model's price is known)."""
+    """Log token usage, and record it on the process-wide meter.
+
+    The meter is what lets the web UI show a live "spent this scan" figure —
+    previously this cost was computed and then thrown away into a log line.
+    """
     in_tok = getattr(usage, "input_tokens", None)
     out_tok = getattr(usage, "output_tokens", None)
     if in_tok is None and out_tok is None:
         return
-    price = _PRICE_PER_MTOK.get(model)
-    if price is not None and in_tok is not None and out_tok is not None:
-        cost = in_tok / 1e6 * price[0] + out_tok / 1e6 * price[1]
-        log.info("eval usage: in=%s out=%s est_cost=$%.5f (%s)", in_tok, out_tok, cost, model)
-    else:
-        log.info("eval usage: in=%s out=%s (%s)", in_tok, out_tok, model)
+    if in_tok is not None and out_tok is not None:
+        cost = METER.record(model, in_tok, out_tok)
+        if cost is not None:
+            log.info("eval usage: in=%s out=%s est_cost=$%.5f (%s)", in_tok, out_tok, cost, model)
+            return
+    log.info("eval usage: in=%s out=%s (%s)", in_tok, out_tok, model)
 
 
 class ClaudeEvaluator:

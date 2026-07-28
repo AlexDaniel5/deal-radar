@@ -15,6 +15,7 @@ from typing import Any
 from ..errors import SendError
 from ..logging import get_logger
 from ..messaging.store import SqliteDraftStore
+from .worker import BackgroundJob
 
 log = get_logger("web.sender")
 
@@ -28,12 +29,17 @@ class MessageSender:
     def __init__(self, send_fn: SendFn, store_factory: Callable[[], SqliteDraftStore]) -> None:
         self._send_fn = send_fn
         self._store_factory = store_factory
-        self._lock = threading.Lock()
-        self._thread: threading.Thread | None = None
+        self._job = BackgroundJob("deal-radar-sender")
         self._draft_id: int | None = None
         self._last_error: str | None = None
 
     def _run(self, draft: dict[str, Any], text: str) -> None:
+        """Send, then record the outcome on the draft row.
+
+        Failures become a ``failed`` draft status rather than propagating: the
+        user needs to see *why* their message didn't go out, and a retry is one
+        click away.
+        """
         draft_id = int(draft["id"])
         try:
             self._send_fn(draft, text)
@@ -44,27 +50,25 @@ class MessageSender:
             log.exception("sending draft #%d failed", draft_id)
         with self._store_factory() as store:
             store.set_status(draft_id, status, error=error)
-        with self._lock:
-            self._thread = None
-            self._draft_id = None
 
     def send(self, draft: dict[str, Any], text: str) -> bool:
         """Send an approved draft in a worker thread. Returns False if one is in flight."""
-        with self._lock:
-            if self._thread is not None and self._thread.is_alive():
-                return False
-            self._last_error = None
-            self._draft_id = int(draft["id"])
-            thread = threading.Thread(
-                target=self._run, args=(draft, text), name="deal-radar-sender", daemon=True
-            )
-            self._thread = thread
-            thread.start()
-            return True
+        draft_id = int(draft["id"])
+
+        def job(_stop: threading.Event) -> None:
+            self._last_error = None  # cleared here so a rejected send can't wipe it
+            self._run(draft, text)
+
+        started = self._job.start(job, on_finish=self._clear_draft)
+        if started:
+            self._draft_id = draft_id
+        return started
+
+    def _clear_draft(self) -> None:
+        self._draft_id = None
 
     def is_busy(self) -> bool:
-        thread = self._thread
-        return thread is not None and thread.is_alive()
+        return self._job.is_busy()
 
     def status(self) -> dict[str, Any]:
         busy = self.is_busy()

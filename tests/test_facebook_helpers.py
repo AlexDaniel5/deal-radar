@@ -220,7 +220,9 @@ def test_prefer_detail_text_over_title() -> None:
     # A real body shorter than the whole card blob but longer than the title wins.
     assert _prefer_detail_text("Selling my build. " + "DDR5, 850W PSU, warranty. " * 3, title)
     # A spec-rich title no longer causes a genuine body to be discarded.
-    assert _prefer_detail_text("Great condition, pickup in Toronto, comes with box and cables", title)
+    assert _prefer_detail_text(
+        "Great condition, pickup in Toronto, comes with box and cables", title
+    )
     # But an empty / stub extraction does not replace the card text.
     assert not _prefer_detail_text("", title)
     assert not _prefer_detail_text("   ", title)

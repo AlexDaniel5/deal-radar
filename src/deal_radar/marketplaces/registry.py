@@ -7,6 +7,9 @@ from ..ratelimit import RateLimiter
 from .base import Marketplace
 from .facebook import FacebookMarketplace
 
+# Marketplaces that actually have an adapter; see IMPLEMENTED_NOTIFIERS for why.
+IMPLEMENTED_MARKETPLACES: tuple[str, ...] = ("facebook",)
+
 
 def build_marketplace(
     name: str,

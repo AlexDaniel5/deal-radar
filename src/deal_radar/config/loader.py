@@ -26,7 +26,8 @@ def _resolve_env(value: Any) -> Any:
                 return os.environ[name]
             except KeyError as exc:
                 raise ConfigError(
-                    f"environment variable {name!r} referenced in config is not set"
+                    f"environment variable {name!r} referenced in config is not set",
+                    kind="env",
                 ) from exc
 
         return _ENV_PATTERN.sub(repl, value)
@@ -37,21 +38,49 @@ def _resolve_env(value: Any) -> Any:
     return value
 
 
+def collect_env_refs(text: str) -> list[str]:
+    """Every distinct ``${VAR}`` name referenced anywhere in raw config text.
+
+    Used by the web UI to report *unset* variables as warnings rather than as
+    errors: a document shouldn't be un-editable just because a runtime secret
+    isn't exported in the shell running the server. :func:`load_config` still
+    enforces them strictly at scan time.
+    """
+    return sorted({m.group(1) for m in _ENV_PATTERN.finditer(text)})
+
+
+def missing_env_refs(text: str) -> list[str]:
+    """The subset of :func:`collect_env_refs` not currently set in the environment."""
+    return [name for name in collect_env_refs(text) if name not in os.environ]
+
+
 def _parse_and_validate(text: str, *, source: str, resolve_env: bool) -> AppConfig:
     try:
         raw = yaml.safe_load(text)
     except yaml.YAMLError as exc:
-        raise ConfigError(f"invalid YAML in {source}: {exc}") from exc
+        mark = getattr(exc, "problem_mark", None)
+        raise ConfigError(
+            f"invalid YAML in {source}: {exc}",
+            kind="yaml",
+            line=None if mark is None else mark.line + 1,
+            column=None if mark is None else mark.column + 1,
+        ) from exc
     if raw is None:
-        raise ConfigError(f"config is empty: {source}")
+        raise ConfigError(f"config is empty: {source}", kind="empty")
     if not isinstance(raw, dict):
-        raise ConfigError(f"config root must be a mapping, got {type(raw).__name__}")
+        raise ConfigError(
+            f"config root must be a mapping, got {type(raw).__name__}", kind="yaml"
+        )
     if resolve_env:
         raw = _resolve_env(raw)
     try:
         return AppConfig.model_validate(raw)
     except ValidationError as exc:
-        raise ConfigError(f"config validation failed for {source}:\n{exc}") from exc
+        raise ConfigError(
+            f"config validation failed for {source}:\n{exc}",
+            kind="schema",
+            errors=[dict(e) for e in exc.errors(include_url=False)],
+        ) from exc
 
 
 def load_config(path: str | Path, *, resolve_env: bool = True) -> AppConfig:

@@ -4,22 +4,180 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
+import os
+import shutil
+import tempfile
+import urllib.parse
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 from .. import paths
-from ..config.loader import validate_config_text
+from ..ai.pricing import METER, estimate_eval_cost
+from ..config.loader import missing_env_refs, validate_config_text
+from ..config.schema import AppConfig
 from ..errors import ConfigError
 from ..logging import LogBuffer, attach_log_buffer, get_logger
 from ..messaging.store import SqliteDraftStore
+from . import preflight, setup
 from .controller import ScannerController
+from .runner import build_free_scan_job
 from .sender import MessageSender
+from .setup import FacebookLogin, SetupError
+from .worker import BackgroundJob
 
 log = get_logger("web.app")
+
+# The frontend lives in plain files next to this module rather than in a Python
+# string: it needs real HTML/CSS/JS tooling, and serving it from disk lets us
+# ship a strict CSP (no inline script, no external origins).
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+# How often the SSE generator re-reads the ring buffer, and how long it may go
+# quiet before sending a comment frame to keep the connection alive.
+_SSE_POLL_SECONDS = 0.7
+_SSE_HEARTBEAT_SECONDS = 15.0
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    """Replace a file's contents without ever leaving it half-written.
+
+    Also keeps one ``.bak`` generation, so a bad save is recoverable by hand.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_file():
+        shutil.copy2(path, path.with_suffix(path.suffix + ".bak"))
+    tmp = tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=str(path.parent), prefix=f".{path.name}.", delete=False
+    )
+    try:
+        with tmp:
+            tmp.write(text)
+        os.replace(tmp.name, path)
+    except BaseException:
+        Path(tmp.name).unlink(missing_ok=True)
+        raise
+
+
+def sse_resume_point(last_event_id: str | None, after: int) -> int:
+    """Where a log stream should resume from.
+
+    ``Last-Event-ID`` is what EventSource replays automatically on reconnect
+    and wins over the ``after`` query param; a malformed value falls back.
+    """
+    if last_event_id is not None:
+        try:
+            return int(last_event_id)
+        except ValueError:
+            pass
+    return after
+
+
+def sse_frame(seq: int, line: str) -> str:
+    """One SSE event. The ``id:`` is what makes reconnects resumable."""
+    return f"id: {seq}\ndata: {json.dumps({'seq': seq, 'line': line})}\n\n"
+
+
+async def sse_log_lines(
+    buffer: LogBuffer,
+    start: int,
+    is_disconnected: Callable[[], Awaitable[bool]],
+    *,
+    poll: float = _SSE_POLL_SECONDS,
+    heartbeat: float = _SSE_HEARTBEAT_SECONDS,
+) -> AsyncIterator[str]:
+    """Stream buffered log lines as SSE until the client goes away.
+
+    Split out of the endpoint so it can be driven directly in tests: an
+    endless generator deadlocks TestClient's teardown.
+    """
+    last = start
+    yield "retry: 3000\n\n"
+    idle = 0.0
+    while not await is_disconnected():
+        for seq, line in buffer.since(last):
+            last = seq
+            yield sse_frame(seq, line)
+            idle = 0.0
+        await asyncio.sleep(poll)
+        idle += poll
+        if idle >= heartbeat:
+            idle = 0.0
+            yield ": ping\n\n"  # keeps proxies and idle detection from cutting us off
+
+
+async def _json_body(request: Request) -> dict[str, Any]:
+    """Parse a JSON request body, treating anything unusable as empty."""
+    try:
+        body = json.loads((await request.body()) or b"{}")
+    except json.JSONDecodeError:
+        return {}
+    return body if isinstance(body, dict) else {}
+
+
+def _env_warnings(text: str) -> list[dict[str, str]]:
+    """Unset ``${VAR}`` references, reported as warnings rather than errors.
+
+    A document shouldn't be un-editable because a runtime secret isn't exported
+    in the shell running the UI; ``load_config`` still enforces it at scan time.
+    """
+    return [
+        {
+            "kind": "env",
+            "message": (
+                f"This refers to an environment variable called {name}, which isn't set "
+                "on this computer. Scans will fail until it is."
+            ),
+        }
+        for name in missing_env_refs(text)
+    ]
+
+
+def _is_local_origin(origin: str, host: str) -> bool:
+    """Is this Origin/Referer our own server?"""
+    try:
+        parsed = urllib.parse.urlparse(origin)
+    except ValueError:
+        return False
+    if parsed.hostname not in ("127.0.0.1", "localhost", "::1"):
+        return False
+    # Same host header (including port) means same server.
+    return not parsed.netloc or not host or parsed.netloc == host
+
+
+async def _guard_state_changing_requests(request: Request, call_next: Any) -> Any:
+    """Block cross-site writes without adding a password to a personal tool.
+
+    The server has no auth, so before this guard any page the user happened to
+    be browsing could POST a form to 127.0.0.1 and overwrite their config or
+    start a paid scan — no preflight is required for a simple form POST, and
+    the attacker never needs to read the response. Requiring JSON forces a
+    CORS preflight, which the browser blocks because we send no CORS headers.
+    """
+    if request.method in ("GET", "HEAD", "OPTIONS"):
+        return await call_next(request)
+
+    origin = request.headers.get("origin") or request.headers.get("referer") or ""
+    host = request.headers.get("host") or ""
+    if origin and not _is_local_origin(origin, host):
+        return JSONResponse(
+            {"ok": False, "error": "cross-site requests are not allowed"}, status_code=403
+        )
+
+    content_type = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+    if content_type != "application/json":
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "this endpoint requires Content-Type: application/json",
+            },
+            status_code=415,
+        )
+    return await call_next(request)
 
 
 def create_app(
@@ -28,8 +186,13 @@ def create_app(
     controller: ScannerController | None = None,
     log_buffer: LogBuffer | None = None,
     sender: MessageSender | None = None,
+    login_fn: Any = None,
 ) -> FastAPI:
-    """Build the web app. Inject ``controller``/``log_buffer``/``sender`` in tests."""
+    """Build the web app.
+
+    Inject ``controller``/``log_buffer``/``sender``/``login_fn`` in tests so no
+    real browser is ever launched.
+    """
     app = FastAPI(title="deal-radar")
     cfg_path = Path(config_path)
     buffer = log_buffer if log_buffer is not None else attach_log_buffer()
@@ -49,9 +212,29 @@ def create_app(
         )
     snd: MessageSender = sender
 
-    @app.get("/", response_class=HTMLResponse)
-    def index() -> str:
-        return _PAGE
+    # Both drive Playwright, so both run on worker threads and are guarded
+    # against overlapping with a scan or a message send.
+    fb_login = (
+        FacebookLogin(login_fn) if login_fn is not None else FacebookLogin()
+    )
+    fb_check = BackgroundJob("deal-radar-fb-check")
+
+    app.middleware("http")(_guard_state_changing_requests)
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+    @app.get("/", response_class=FileResponse)
+    def index() -> FileResponse:
+        # no-cache on the shell only: the hashed-by-mtime assets under /static
+        # revalidate cheaply, but a stale shell would survive an upgrade.
+        return FileResponse(
+            STATIC_DIR / "index.html",
+            headers={
+                "Cache-Control": "no-cache",
+                # Blocks every external origin, so the "no CDN, works offline"
+                # rule is enforced by the browser rather than by convention.
+                "Content-Security-Policy": "default-src 'self'",
+            },
+        )
 
     @app.get("/api/config", response_class=PlainTextResponse)
     def get_config() -> str:
@@ -59,14 +242,37 @@ def create_app(
 
     @app.post("/api/config")
     async def save_config(request: Request) -> JSONResponse:
-        text = (await request.body()).decode("utf-8")
         try:
-            validate_config_text(text)
+            body = json.loads((await request.body()) or b"{}")
+        except json.JSONDecodeError:
+            return JSONResponse(
+                {"ok": False, "error": "expected a JSON body like {\"text\": \"...\"}"},
+                status_code=400,
+            )
+        if not isinstance(body, dict) or not isinstance(body.get("text"), str):
+            return JSONResponse(
+                {"ok": False, "error": "expected a JSON body like {\"text\": \"...\"}"},
+                status_code=400,
+            )
+        text = body["text"]
+        try:
+            # resolve_env=False: an unset ${VAR} is a runtime concern, reported
+            # as a warning below, not a reason to refuse the edit.
+            validate_config_text(text, resolve_env=False)
         except ConfigError as exc:
-            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
-        cfg_path.write_text(text, encoding="utf-8")
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": str(exc),  # full text, never truncated by the client
+                    "kind": exc.kind,
+                    "errors": exc.errors,
+                    "line": exc.line,
+                },
+                status_code=400,
+            )
+        _atomic_write(cfg_path, text)
         log.info("config saved via web UI (%d bytes)", len(text))
-        return JSONResponse({"ok": True})
+        return JSONResponse({"ok": True, "warnings": _env_warnings(text)})
 
     @app.get("/api/config/summary")
     def config_summary() -> dict[str, Any]:
@@ -118,7 +324,9 @@ def create_app(
             rating = r.get("rating") or 0
             price = r.get("last_price")
             # Higher match/rating first; among those, the cheapest asking price.
-            return (-int(matched), -int(rating), float(price) if price is not None else float("inf"))
+            # Unknown price sorts last rather than pretending to be free.
+            cheapest = float(price) if price is not None else float("inf")
+            return (-int(matched), -int(rating), cheapest)
 
         rows.sort(key=rank)
         return {"rows": rows[: max(1, limit)]}
@@ -132,7 +340,8 @@ def create_app(
             return {"ok": True, "deleted": 0}
         with SqliteSeenStore(db) as store:
             deleted = store.clear(item)
-        log.info("cleared %d seen listing(s)%s via web UI", deleted, f" for {item!r}" if item else "")
+        scope = f" for {item!r}" if item else ""
+        log.info("cleared %d seen listing(s)%s via web UI", deleted, scope)
         return {"ok": True, "deleted": deleted}
 
     @app.post("/api/seen/delete")
@@ -207,14 +416,183 @@ def create_app(
             store.set_status(draft_id, "dismissed")
         return JSONResponse({"ok": True})
 
+    # --- setup wizard -----------------------------------------------------------
+    #
+    # Everything a first-time user needs to get working, without a terminal:
+    # what's missing, why it matters, and (where possible) a button to fix it.
+
+    def _cfg_or_none() -> AppConfig | None:
+        return setup.load_config_or_none(cfg_path)
+
+    @app.get("/api/setup/status")
+    def setup_status() -> JSONResponse:
+        state = setup.read_state()
+        checks = preflight.all_checks(
+            cfg_path,
+            key_verified_ts=state.get("key_verified_ts"),
+            facebook_checked=(
+                {"ok": state.get("fb_checked_ok"), "ts": state.get("fb_checked_ts")}
+                if state.get("fb_checked_ts")
+                else None
+            ),
+        )
+        body = preflight.summarize(checks)
+        body["login"] = fb_login.status()
+        body["can_open_browser"] = bool(
+            os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
+        )
+        # The masked key hint lives in here; don't let a proxy or the bfcache
+        # hold on to it.
+        return JSONResponse(body, headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/setup/api-key")
+    async def setup_save_key(request: Request) -> JSONResponse:
+        body = await _json_body(request)
+        try:
+            result = setup.save_api_key(cfg_path, _cfg_or_none(), str(body.get("key") or ""))
+        except SetupError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+    @app.delete("/api/setup/api-key")
+    def setup_clear_key() -> JSONResponse:
+        return JSONResponse(setup.clear_api_key(cfg_path, _cfg_or_none()))
+
+    @app.post("/api/setup/api-key/test")
+    async def setup_test_key(request: Request) -> JSONResponse:
+        body = await _json_body(request)
+        cfg = _cfg_or_none()
+        if cfg is None:
+            return JSONResponse(
+                {"ok": False, "error": "Fix your settings first."}, status_code=400
+            )
+        try:
+            return JSONResponse(setup.test_api_key(cfg, deep=bool(body.get("deep"))))
+        except SetupError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+    @app.post("/api/setup/test-notify")
+    def setup_test_notify() -> JSONResponse:
+        cfg = _cfg_or_none()
+        if cfg is None:
+            return JSONResponse(
+                {"ok": False, "error": "Fix your settings first."}, status_code=400
+            )
+        try:
+            return JSONResponse(setup.send_test_notification(cfg))
+        except SetupError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+    def _require_no_browser_in_use() -> JSONResponse | None:
+        """Only one Playwright browser at a time — scans, sends and logins share it."""
+        if ctl.is_running():
+            return JSONResponse(
+                {"ok": False, "error": "Stop the scan first — only one browser at a time."},
+                status_code=409,
+            )
+        if snd.is_busy():
+            return JSONResponse(
+                {"ok": False, "error": "A message is being sent — try again in a moment."},
+                status_code=409,
+            )
+        return None
+
+    @app.post("/api/setup/facebook/check")
+    def setup_facebook_check() -> JSONResponse:
+        cfg = _cfg_or_none()
+        if cfg is None:
+            return JSONResponse(
+                {"ok": False, "error": "Fix your settings first."}, status_code=400
+            )
+        busy = _require_no_browser_in_use()
+        if busy is not None:
+            return busy
+        started = fb_check.start(lambda _stop: _run_session_check(cfg))
+        if not started:
+            return JSONResponse(
+                {"ok": False, "error": "Already checking."}, status_code=409
+            )
+        return JSONResponse({"ok": True, "started": True}, status_code=202)
+
+    def _run_session_check(cfg: AppConfig) -> None:
+        app.state.facebook_check_result = setup.check_facebook_session(cfg)
+
+    @app.get("/api/setup/facebook/check")
+    def setup_facebook_check_status() -> dict[str, Any]:
+        return {
+            "busy": fb_check.is_busy(),
+            "error": fb_check.error,
+            "result": getattr(app.state, "facebook_check_result", None),
+        }
+
+    @app.post("/api/setup/facebook/login")
+    def setup_facebook_login() -> JSONResponse:
+        cfg = _cfg_or_none()
+        if cfg is None:
+            return JSONResponse(
+                {"ok": False, "error": "Fix your settings first."}, status_code=400
+            )
+        busy = _require_no_browser_in_use()
+        if busy is not None:
+            return busy
+        try:
+            fb_login.start(cfg)
+        except SetupError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=409)
+        return JSONResponse({"ok": True, "status": fb_login.status()}, status_code=202)
+
+    @app.get("/api/setup/facebook/login")
+    def setup_facebook_login_status() -> dict[str, Any]:
+        return fb_login.status()
+
+    @app.post("/api/setup/facebook/login/finish")
+    def setup_facebook_login_finish() -> dict[str, Any]:
+        fb_login.finish()
+        return {"ok": True, "status": fb_login.status()}
+
+    @app.post("/api/setup/facebook/login/cancel")
+    def setup_facebook_login_cancel() -> dict[str, Any]:
+        fb_login.cancel()
+        return {"ok": True, "status": fb_login.status()}
+
     @app.get("/api/status")
     def status() -> dict[str, Any]:
-        return ctl.status()
+        return {**ctl.status(), "spend": METER.snapshot()}
+
+    @app.get("/api/pricing")
+    def pricing() -> dict[str, Any]:
+        """What a scan is likely to cost, so the UI can say so before the click."""
+        cfg = _cfg_or_none()
+        if cfg is None:
+            return {"known": False, "reason": "settings are not valid"}
+        per_eval = estimate_eval_cost(cfg.ai)
+        enabled = [i for i in cfg.items if i.enabled]
+        per_item = cfg.scan.max_evaluations_per_item
+        return {
+            "known": per_eval is not None,
+            "model": cfg.ai.model,
+            "per_eval": per_eval,
+            "max_evaluations_per_item": per_item,
+            "items": len(enabled),
+            "max_listings_checked": per_item * len(enabled),
+            "max_cost": None if per_eval is None else round(per_eval * per_item * len(enabled), 4),
+            "poll_interval_seconds": cfg.schedule.poll_interval_seconds,
+            "analyze_images": cfg.ai.analyze_images,
+        }
 
     @app.post("/api/scanner/start")
-    def start(mode: str = "loop") -> dict[str, Any]:
+    def start(mode: str = "loop", free: int = 0) -> dict[str, Any]:
+        """Start a scan.
+
+        ``free=1`` is the zero-cost mode: it short-circuits before any AI call
+        or detail-page fetch, so it proves the browser and the Facebook sign-in
+        work without spending anything. It's the safe first thing to try.
+        """
         chosen = mode if mode in ("loop", "once") else "loop"
-        started = ctl.start(chosen)
+        if free:
+            started = ctl.start_with(build_free_scan_job(str(cfg_path)), mode="free")
+        else:
+            started = ctl.start(chosen)
         return {"started": started, "status": ctl.status()}
 
     @app.post("/api/scanner/stop")
@@ -229,247 +607,21 @@ def create_app(
 
     @app.get("/api/logs/stream")
     async def logs_stream(request: Request, after: int = 0) -> StreamingResponse:
-        async def gen() -> AsyncIterator[str]:
-            last = after
-            while not await request.is_disconnected():
-                for seq, line in buffer.since(last):
-                    last = seq
-                    yield f"data: {json.dumps({'seq': seq, 'line': line})}\n\n"
-                await asyncio.sleep(0.7)
-
-        return StreamingResponse(gen(), media_type="text/event-stream")
+        # Resume where the client left off. EventSource replays Last-Event-ID
+        # automatically on reconnect; without honouring it, every dropped
+        # connection re-sent the whole 500-line buffer and the log pane showed
+        # everything twice.
+        start = sse_resume_point(request.headers.get("Last-Event-ID"), after)
+        return StreamingResponse(
+            sse_log_lines(buffer, start, request.is_disconnected),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
 
     app.state.controller = ctl
     app.state.log_buffer = buffer
     app.state.sender = snd
+    app.state.facebook_login = fb_login
+    app.state.facebook_check = fb_check
+    app.state.facebook_check_result = None
     return app
-
-
-_PAGE = """<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>deal-radar</title>
-<style>
-  :root { color-scheme: dark; }
-  * { box-sizing: border-box; }
-  body { margin: 0; font: 14px/1.5 system-ui, sans-serif; background: #0f1115; color: #e6e6e6; }
-  header { padding: 12px 18px; background: #171a21; border-bottom: 1px solid #2a2f3a;
-           display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
-  h1 { font-size: 16px; margin: 0; font-weight: 600; }
-  main { padding: 18px; display: grid; gap: 18px; grid-template-columns: 1fr 1fr; }
-  section { background: #171a21; border: 1px solid #2a2f3a; border-radius: 8px; padding: 14px; }
-  section h2 { font-size: 13px; margin: 0 0 10px; color: #9aa4b2; text-transform: uppercase; letter-spacing: .04em; }
-  #logsec, #configsec, #draftsec { grid-column: 1 / -1; }
-  .draft { border: 1px solid #2a2f3a; border-radius: 6px; padding: 10px; margin-bottom: 10px; }
-  .draft textarea { height: 64px; margin-top: 6px; }
-  .tag { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: #2a3140; }
-  button { background: #2a3140; color: #e6e6e6; border: 1px solid #3a4353; border-radius: 6px;
-           padding: 6px 12px; cursor: pointer; font: inherit; }
-  button:hover { background: #333c4d; }
-  button.primary { background: #2f6f4f; border-color: #3a8a63; }
-  button.danger { background: #7a2f38; border-color: #9a3d48; }
-  textarea { width: 100%; height: 340px; background: #0b0d11; color: #d8dee9; border: 1px solid #2a2f3a;
-             border-radius: 6px; padding: 10px; font: 12px/1.5 ui-monospace, monospace; resize: vertical; }
-  #log { height: 300px; overflow: auto; background: #0b0d11; border: 1px solid #2a2f3a; border-radius: 6px;
-         padding: 10px; font: 12px/1.45 ui-monospace, monospace; white-space: pre-wrap; }
-  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; background: #555; }
-  .dot.on { background: #4ade80; } .dot.stop { background: #fbbf24; }
-  .muted { color: #8892a0; } .err { color: #f87171; } .ok { color: #4ade80; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  td, th { text-align: left; padding: 4px 8px; border-bottom: 1px solid #232833; }
-  a { color: #7ab7ff; } .rate { color: #fbbf24; font-weight: 600; }
-  #savemsg { margin-left: 10px; }
-</style>
-</head>
-<body>
-<header>
-  <h1>deal-radar</h1>
-  <span class="dot" id="dot"></span><span id="statustext" class="muted">…</span>
-  <span style="flex:1"></span>
-  <button class="primary" onclick="scanner('start?mode=loop')">Start loop</button>
-  <button onclick="scanner('start?mode=once')">Scan now</button>
-  <button class="danger" onclick="scanner('stop')">Stop</button>
-</header>
-<main>
-  <section id="configsec">
-    <h2>Config (config.yaml)</h2>
-    <textarea id="config" spellcheck="false"></textarea>
-    <div style="margin-top:8px"><button class="primary" onclick="saveConfig()">Validate &amp; save</button>
-      <span id="savemsg"></span></div>
-  </section>
-  <section>
-    <h2>Recent listings
-      <button class="danger" style="float:right;font-size:11px;padding:2px 8px"
-              onclick="clearSeen()" title="Forget every scanned listing (they can be scanned again)">Clear all</button>
-    </h2>
-    <div id="seenmsg" class="muted" style="margin-bottom:6px"></div>
-    <table><tbody id="seen"></tbody></table>
-  </section>
-  <section>
-    <h2>Best offers
-      <button style="float:right;font-size:11px;padding:2px 8px"
-              onclick="loadBest()" title="Rank everything scanned by match, rating, then price">Show best</button>
-    </h2>
-    <table><tbody id="best"><tr><td class="muted">Click “Show best” to rank scanned listings.</td></tr></tbody></table>
-  </section>
-  <section>
-    <h2>Items</h2>
-    <div id="items" class="muted">…</div>
-  </section>
-  <section id="draftsec">
-    <h2>Message drafts</h2>
-    <div id="drafts" class="muted">…</div>
-  </section>
-  <section id="logsec">
-    <h2>Live log</h2>
-    <div id="log"></div>
-  </section>
-</main>
-<script>
-const $ = s => document.querySelector(s);
-async function refreshStatus() {
-  const s = await (await fetch('/api/status')).json();
-  const dot = $('#dot'), t = $('#statustext');
-  dot.className = 'dot' + (s.stopping ? ' stop' : s.running ? ' on' : '');
-  t.textContent = s.stopping ? 'stopping…' : s.running ? ('running (' + s.mode + ')') : 'idle';
-  t.className = s.error ? 'err' : 'muted';
-  if (s.error) t.textContent += ' — last error: ' + s.error;
-}
-async function scanner(action) {
-  await fetch('/api/scanner/' + action, {method: 'POST'});
-  refreshStatus();
-}
-async function loadConfig() { $('#config').value = await (await fetch('/api/config')).text(); }
-async function saveConfig() {
-  const msg = $('#savemsg'); msg.textContent = 'saving…'; msg.className = 'muted';
-  const r = await fetch('/api/config', {method: 'POST', body: $('#config').value});
-  const j = await r.json();
-  if (j.ok) { msg.textContent = 'saved ✓ (applies on next scan start)'; msg.className = 'ok'; loadSummary(); }
-  else { msg.textContent = 'invalid: ' + j.error.split('\\n')[0]; msg.className = 'err'; }
-}
-const escAttr = s => String(s == null ? '' : s)
-  .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
-function seenRow(r) {
-  return '<tr><td class="muted">' + (r.first_seen_ts
-      ? new Date(r.first_seen_ts * 1000).toLocaleDateString(undefined, {month: 'short', day: 'numeric'})
-      : '?') + '</td>' +
-    '<td class="rate">' + (r.rating != null ? r.rating + '/5'
-      : '<span class="muted" title="not fully scraped / not evaluated">–/5</span>') + '</td>' +
-    '<td>' + (r.last_price != null ? '$' + Math.round(r.last_price) : '?') + '</td>' +
-    '<td>' + (r.images_analyzed ? '<span title="AI looked through the photos">📷</span> ' : '') +
-    (r.matched ? '<span title="matched" class="ok">★</span> ' : '') +
-    '<a href="' + r.url + '" target="_blank" rel="noopener">' +
-    (r.title || r.listing_id).replace(/</g,'&lt;') + '</a></td>' +
-    '<td><button class="del danger" style="font-size:11px;padding:1px 6px" title="Delete (allows re-scan)" ' +
-    'data-item="' + escAttr(r.item_name) + '" data-id="' + escAttr(r.listing_id) + '">✕</button></td></tr>';
-}
-async function loadSeen() {
-  const j = await (await fetch('/api/seen')).json();
-  $('#seen').innerHTML = (j.rows || []).map(seenRow).join('')
-    || '<tr><td class="muted">no listings recorded yet</td></tr>';
-}
-document.addEventListener('click', async e => {
-  const b = e.target.closest && e.target.closest('button.del');
-  if (!b) return;
-  await fetch('/api/seen/delete', {method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({item_name: b.dataset.item, listing_id: b.dataset.id})});
-  loadSeen();
-});
-async function clearSeen() {
-  if (!confirm('Clear ALL scanned listings? They can be found and scanned again.')) return;
-  const j = await (await fetch('/api/seen/clear', {method: 'POST'})).json();
-  $('#seenmsg').textContent = 'cleared ' + (j.deleted || 0) + ' listing(s)';
-  loadSeen();
-  $('#best').innerHTML = '<tr><td class="muted">Click “Show best” to rank scanned listings.</td></tr>';
-}
-async function loadBest() {
-  const j = await (await fetch('/api/seen/best?limit=8')).json();
-  $('#best').innerHTML = (j.rows || []).map(seenRow).join('')
-    || '<tr><td class="muted">nothing scanned yet</td></tr>';
-}
-async function loadSummary() {
-  const j = await (await fetch('/api/config/summary')).json();
-  if (j.error) { $('#items').innerHTML = '<span class="err">' + j.error.split('\\n')[0] + '</span>'; return; }
-  $('#items').innerHTML = j.items.map(i =>
-    '<div>' + (i.enabled ? '' : '(disabled) ') + '<b>' + i.name.replace(/</g,'&lt;') + '</b> — $' +
-    (i.price_min ?? 0) + '–' + (i.price_max ?? '∞') + ', min ' + i.min_rating + '/5</div>').join('');
-}
-function fmtDate(ts) {
-  return ts ? new Date(ts * 1000).toLocaleDateString(undefined, {month: 'short', day: 'numeric'}) : '?';
-}
-function draftCard(r) {
-  const esc = s => String(s == null ? '' : s).replace(/</g, '&lt;');
-  const card = document.createElement('div');
-  card.className = 'draft';
-  const asking = r.asking_price != null ? '$' + Math.round(r.asking_price) : '$?';
-  const offer = r.offer_price != null ? asking + ' &rarr; offer $' + r.offer_price : asking + ' (asking price)';
-  card.innerHTML = '<span class="muted">' + fmtDate(r.created_ts) + '</span> <b>' + esc(r.item_name) +
-    '</b> — <a href="' + r.url + '" target="_blank" rel="noopener">' + esc(r.title) + '</a> · ' + offer +
-    (r.status === 'sending' ? ' · <span class="muted">sending…</span>' : '') +
-    (r.error ? ' · <span class="err">' + esc(r.error) + '</span>' : '');
-  const ta = document.createElement('textarea');
-  ta.value = r.message;  // DOM property: safe for quotes/angle brackets
-  card.appendChild(ta);
-  if (r.status !== 'sending') {
-    const row = document.createElement('div');
-    row.style.marginTop = '6px';
-    const send = document.createElement('button');
-    send.className = 'primary';
-    send.textContent = r.status === 'failed' ? 'Retry send' : 'Approve & send';
-    send.onclick = () => draftAction(r.id, 'approve', ta.value);
-    const dis = document.createElement('button');
-    dis.textContent = 'Dismiss';
-    dis.style.marginLeft = '8px';
-    dis.onclick = () => draftAction(r.id, 'dismiss');
-    row.appendChild(send); row.appendChild(dis);
-    card.appendChild(row);
-  }
-  return card;
-}
-async function loadDrafts() {
-  const active = document.activeElement;
-  if (active && active.closest && active.closest('#drafts')) return; // don't clobber an edit
-  const j = await (await fetch('/api/drafts')).json();
-  const el = $('#drafts');
-  el.textContent = '';
-  const rows = j.rows || [];
-  if (!rows.length) { el.innerHTML = '<span class="muted">no drafts yet — enable messaging in the config</span>'; return; }
-  for (const r of rows) {
-    if (r.status === 'pending' || r.status === 'failed' || r.status === 'sending') {
-      el.appendChild(draftCard(r));
-    } else {
-      const line = document.createElement('div');
-      line.className = 'muted';
-      line.innerHTML = '<span class="tag">' + r.status + '</span> ' + fmtDate(r.updated_ts) + ' ' +
-        String(r.item_name).replace(/</g, '&lt;') + ': ' + String(r.title).replace(/</g, '&lt;');
-      el.appendChild(line);
-    }
-  }
-}
-async function draftAction(id, action, message) {
-  const opts = {method: 'POST'};
-  if (message !== undefined) {
-    opts.headers = {'Content-Type': 'application/json'};
-    opts.body = JSON.stringify({message});
-  }
-  const r = await fetch('/api/drafts/' + id + '/' + action, opts);
-  if (!r.ok) {
-    const j = await r.json().catch(() => ({}));
-    alert(j.error || 'request failed');
-  }
-  loadDrafts();
-}
-const log = $('#log');
-new EventSource('/api/logs/stream').onmessage = e => {
-  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
-  log.textContent += JSON.parse(e.data).line + '\\n';
-  if (atBottom) log.scrollTop = log.scrollHeight;
-};
-loadConfig(); loadSeen(); loadSummary(); loadDrafts(); refreshStatus();
-setInterval(refreshStatus, 3000); setInterval(loadSeen, 15000); setInterval(loadDrafts, 10000);
-</script>
-</body>
-</html>
-"""

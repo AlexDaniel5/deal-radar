@@ -23,6 +23,15 @@ schedule:
   jitter_seconds: 600
   per_request_min_interval_seconds: 25
 
+# How much one scan may spend. Every AI evaluation is a paid API call, so this
+# is the cost cap — and unlike the old CLI-only flags, the polling loop honours
+# it too. 25 x 2 items is roughly a nickel a scan on claude-haiku-4-5; the first
+# scan costs the most, because after that already-checked listings are skipped.
+# Set max_evaluations_per_item to 0 for a free, scrape-only run.
+scan:
+  max_evaluations_per_item: 25
+  max_listings_per_search: 200
+
 # Seller messaging (EXPERIMENTAL — read the README warning; default OFF).
 # When enabled, a match creates a *draft* message you review and approve in the
 # web UI before it is sent; nothing ever goes out automatically.

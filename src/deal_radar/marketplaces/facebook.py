@@ -12,7 +12,9 @@ count, and a single logged-in account. No bot-detection evasion.
 
 from __future__ import annotations
 
+import json
 import re
+import time
 import urllib.parse
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import replace
@@ -299,6 +301,50 @@ def _resolve_session_path(config: MarketplaceConfig) -> Path:
     return Path(config.session_path) if config.session_path else default_session_path("facebook")
 
 
+def resolve_session_path(config: MarketplaceConfig) -> Path:
+    """Where this marketplace's logged-in browser session is stored."""
+    return _resolve_session_path(config)
+
+
+# Cookies Facebook sets on a signed-in session: the account id and the session
+# secret. Both must be present for a saved state to be worth trying.
+_LOGIN_COOKIES = ("c_user", "xs")
+
+
+def read_session_state(path: Path) -> dict[str, Any]:
+    """Summarise a saved session file without launching a browser.
+
+    Cheap enough for a status endpoint. Note this only reports what the file
+    *claims* — Facebook can invalidate a session server-side at any time, so a
+    ``looks_valid`` result still needs the live probe to be trusted.
+    """
+    info: dict[str, Any] = {
+        "exists": path.is_file(),
+        "path": str(path),
+        "saved_ts": None,
+        "has_login_cookies": False,
+        "expires_ts": None,
+        "expired": None,
+        "readable": False,
+    }
+    if not info["exists"]:
+        return info
+    info["saved_ts"] = path.stat().st_mtime
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+        cookies = {c["name"]: c for c in state.get("cookies", []) if "name" in c}
+    except (OSError, ValueError, TypeError, AttributeError):
+        return info  # unreadable or not the shape we expect: treat as no session
+    info["readable"] = True
+    info["has_login_cookies"] = all(name in cookies for name in _LOGIN_COOKIES)
+    expires = cookies.get("xs", {}).get("expires")
+    # Playwright writes -1 for a session cookie, i.e. no stated expiry.
+    if isinstance(expires, int | float) and expires > 0:
+        info["expires_ts"] = float(expires)
+        info["expired"] = float(expires) < time.time()
+    return info
+
+
 class FacebookMarketplace:
     """Searches Facebook Marketplace using a persisted logged-in browser session.
 
@@ -559,11 +605,16 @@ def capture_session(
     *,
     wait_for_login: Callable[[], None],
     headless: bool = False,
+    on_open: Callable[[], None] | None = None,
 ) -> Path:
     """Open a headful browser for a one-time manual login and save the session.
 
     ``wait_for_login`` blocks until the operator has finished logging in (the CLI
-    passes a function that waits for the user to press Enter).
+    passes a function that waits for the user to press Enter; the web UI passes
+    one that waits on an Event set by a button click).
+
+    ``on_open`` fires once the login page is actually up, so a caller can move
+    its own UI from "opening a browser…" to "sign in, then click below".
     """
     try:
         from playwright.sync_api import sync_playwright
@@ -579,8 +630,16 @@ def capture_session(
         context = browser.new_context()
         page = context.new_page()
         page.goto("https://www.facebook.com/marketplace/", wait_until="domcontentloaded")
+        if on_open is not None:
+            on_open()
         wait_for_login()
-        context.storage_state(path=str(session_path))
+        try:
+            context.storage_state(path=str(session_path))
+        except Exception as exc:  # noqa: BLE001 - usually the window was closed by hand
+            raise SearchError(
+                "the browser window closed before your sign-in could be saved. "
+                "Try again, and leave the window open when you confirm you're signed in."
+            ) from exc
         context.close()
         browser.close()
     return session_path

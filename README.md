@@ -56,6 +56,9 @@ equivalent. All commands take `--config PATH` (default `config.yaml`).
 
 | Command | What it does |
 |---|---|
+| `setup` | One-time: download the Chromium build deal-radar drives. Run this before `serve`. |
+| `doctor` | Check whether deal-radar is ready to scan — settings, browser, API key, Facebook sign-in, alerts — and say what to do about anything that isn't. Same checks the web UI's setup screen shows. Exits non-zero if a scan couldn't work. |
+| `test-notify` | Send one obviously-fake alert, to prove notifications actually reach your phone. |
 | `validate-config` | Parse and validate the config, print a summary, exit. No network. |
 | `login [marketplace]` | Open a browser for a one-time manual login; saves the session for later runs. Defaults to `facebook`. |
 | `run-once` | Run **one** full scan pass over your items, then exit. |
@@ -68,8 +71,8 @@ equivalent. All commands take `--config PATH` (default `config.yaml`).
 | Flag | Default | What it does |
 |---|---|---|
 | `--item SUBSTR` | all items | Only scan items whose name **contains** `SUBSTR` (case-insensitive). **Repeatable**: `--item pc --item bike` scans both. Omit to scan everything. An unknown value errors and lists the available names. |
-| `--limit N` | `40` | Max listings to collect per marketplace (caps how many search results are scraped). |
-| `--max-evals N` | `25` | Max **AI evaluations per item, per scan**. Each evaluation is one Claude API call = real spend, so this is your cost cap. `--max-evals 0` short-circuits before any API call — a free scrape-only mode. |
+| `--limit N` | `scan.max_listings_per_search` (200) | Max listings to collect per marketplace (caps how many search results are scraped). Overrides the config. |
+| `--max-evals N` | `scan.max_evaluations_per_item` (25) | Max **AI evaluations per item, per scan**. Each evaluation is one Claude API call = real spend, so this is your cost cap. `--max-evals 0` short-circuits before any API call *or detail-page fetch* — a free scrape-only mode. Overrides the config. |
 | `--dry-run` | off | Still evaluates listings, but **does not send notifications**. This does *not* save money — the Claude call still happens; only the ntfy push is suppressed. Use `--max-evals` to bound cost. |
 | `--headful` | off (headless) | Show the Chromium window so you can watch it work (useful for debugging selectors/login). |
 | `--max-cycles N` (`run` only) | unlimited | Stop after N loop cycles instead of running until Ctrl-C. Mainly for testing. |
@@ -114,6 +117,23 @@ Run the local web server with `.venv/bin/deal-radar serve`, then open http://127
 .venv/bin/deal-radar serve
 ```
 
+**First run.** If anything essential is missing, the page opens on a setup screen
+instead of the control panel: it names each problem in plain language and, where
+it can, fixes it in place — paste an Anthropic API key (saved to `.env` next to
+your config, `0600`, already gitignored), sign in to Facebook in a browser window
+it opens for you, send a test alert, and check whether a saved Facebook sign-in
+still works. That last one matters: an expired sign-in otherwise makes a scan
+finish looking clean with zero results.
+
+Downloading the browser is the one thing the UI can't do for you — on Linux it
+often needs `playwright install-deps` and root — so it shows the command to run.
+`deal-radar setup` does it, and `deal-radar doctor` prints the same checks in a
+terminal.
+
+> The server has no password. It listens on `127.0.0.1` by default, which is
+> the right thing; if you pass `--host`, anyone who can reach that address can
+> read your settings, start scans that cost money, and message sellers as you.
+
 ## Messaging sellers (off by default)
 
 > **Warning.** Automated messaging can violate Facebook's Terms of Service and
@@ -138,7 +158,12 @@ session and sends it) or **Dismiss**. Guarantees:
 ## Cost & safety notes
 
 - **Every AI evaluation costs money.** It's one Claude API call per *new* listing
-  that passes the cheap filters (price + exclude-keywords), capped by `--max-evals`.
+  that passes the cheap filters (price + exclude-keywords), capped by
+  `scan.max_evaluations_per_item` (or `--max-evals`).
+- **The web UI shows the cost before you click**, computed from your model, your
+  item count and your cap — and a running "$0.014 this scan" counter while it
+  works. Under Advanced there's a **Test scan (free)**, which looks at what's out
+  there without asking the AI anything: the safest first thing to try.
   Already-seen listings are skipped, so steady-state cost is just newly-appeared
   listings. With the default `claude-haiku-4-5` model each eval is well under a
   cent; the per-eval cost is logged (`eval usage: … est_cost=$…`).

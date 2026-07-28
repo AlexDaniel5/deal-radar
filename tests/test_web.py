@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import threading
 import time
 from collections.abc import Callable
@@ -17,7 +19,7 @@ from deal_radar.errors import SendError
 from deal_radar.logging import LogBuffer
 from deal_radar.messaging.store import SqliteDraftStore
 from deal_radar.models import Evaluation, Listing
-from deal_radar.web.app import create_app
+from deal_radar.web.app import create_app, sse_frame, sse_log_lines, sse_resume_point
 from deal_radar.web.controller import ScannerController
 from deal_radar.web.sender import MessageSender
 
@@ -109,6 +111,53 @@ def _client(tmp_path: Path) -> tuple[TestClient, Path, LogBuffer, ScannerControl
     return TestClient(app), cfg, buf, ctl
 
 
+def test_static_assets_served(tmp_path: Path) -> None:
+    client, _, _, _ = _client(tmp_path)
+    for name, fragment in (
+        ("app.css", "body {"),
+        ("main.js", "refreshStatus"),
+        ("common.js", "export"),
+    ):
+        r = client.get(f"/static/{name}")
+        assert r.status_code == 200, name
+        assert fragment in r.text, name
+
+
+def test_index_sets_no_cache_and_csp(tmp_path: Path) -> None:
+    client, _, _, _ = _client(tmp_path)
+    r = client.get("/")
+    assert r.headers["cache-control"] == "no-cache"
+    # A strict CSP is what mechanically enforces "no CDN, works offline".
+    assert r.headers["content-security-policy"] == "default-src 'self'"
+
+
+def test_static_dir_ships_with_the_package() -> None:
+    """Guard against a future .gitignore or build rule swallowing the frontend.
+
+    Without this, a packaging regression would only show up as a blank page
+    for someone who installed from a wheel.
+    """
+    import deal_radar.web
+
+    static = Path(deal_radar.web.__file__).parent / "static"
+    for name in ("index.html", "app.css", "common.js", "main.js"):
+        asset = static / name
+        assert asset.is_file(), f"{name} is missing from the package"
+        assert asset.stat().st_size > 0, f"{name} is empty"
+
+
+def test_frontend_has_no_external_origins() -> None:
+    """The page must work offline: no CDN, no remote font, no analytics."""
+    import re
+
+    import deal_radar.web
+
+    static = Path(deal_radar.web.__file__).parent / "static"
+    pattern = re.compile(r"""(?:src|href)\s*=\s*["']https?://""", re.IGNORECASE)
+    for asset in static.iterdir():
+        assert not pattern.search(asset.read_text()), f"{asset.name} references an external origin"
+
+
 def test_index_and_get_config(tmp_path: Path) -> None:
     client, cfg, _, _ = _client(tmp_path)
     assert "deal-radar" in client.get("/").text
@@ -124,7 +173,7 @@ def test_config_summary(tmp_path: Path) -> None:
 def test_save_config_valid_writes_file(tmp_path: Path) -> None:
     client, cfg, _, _ = _client(tmp_path)
     edited = VALID_CONFIG.replace("min_rating: 4", "min_rating: 5")
-    resp = client.post("/api/config", content=edited)
+    resp = client.post("/api/config", json={"text": edited})
     assert resp.status_code == 200 and resp.json()["ok"] is True
     assert "min_rating: 5" in cfg.read_text()
 
@@ -132,9 +181,154 @@ def test_save_config_valid_writes_file(tmp_path: Path) -> None:
 def test_save_config_invalid_rejected_and_file_unchanged(tmp_path: Path) -> None:
     client, cfg, _, _ = _client(tmp_path)
     before = cfg.read_text()
-    resp = client.post("/api/config", content="{}")  # missing required sections
+    resp = client.post("/api/config", json={"text": "{}"})  # missing required sections
     assert resp.status_code == 400 and resp.json()["ok"] is False
     assert cfg.read_text() == before  # not clobbered
+
+
+def test_save_config_error_is_full_text_not_a_header(tmp_path: Path) -> None:
+    """The reported bug: the client used to show only the first line.
+
+    For a schema failure that first line is the content-free header
+    "config validation failed for <submitted config>:", so the user was told
+    nothing at all. The body must carry the whole message plus per-field
+    locations.
+    """
+    client, _, _, _ = _client(tmp_path)
+    bad = "version: 1\nitems: []\nnotifiers: []\n"
+    body = client.post("/api/config", json={"text": bad}).json()
+    assert body["kind"] == "schema"
+    assert body["error"].count("\n") >= 2, "must be more than the header line"
+    assert "notifiers" in body["error"] and "items" in body["error"]
+    locs = [tuple(e["loc"]) for e in body["errors"]]
+    assert ("notifiers",) in locs and ("items",) in locs
+
+
+def test_save_config_reports_unset_env_as_warning_not_error(tmp_path: Path) -> None:
+    """An unset ${VAR} shouldn't make a document un-editable in the browser."""
+    client, cfg, _, _ = _client(tmp_path)
+    text = VALID_CONFIG.replace("topic: t", 'topic: "${DEAL_RADAR_NOPE}"')
+    resp = client.post("/api/config", json={"text": text})
+    assert resp.status_code == 200
+    warnings = resp.json()["warnings"]
+    assert any("DEAL_RADAR_NOPE" in w["message"] for w in warnings)
+    assert "${DEAL_RADAR_NOPE}" in cfg.read_text()  # stored unresolved
+
+
+def test_save_config_keeps_a_backup(tmp_path: Path) -> None:
+    client, cfg, _, _ = _client(tmp_path)
+    original = cfg.read_text()
+    edited = VALID_CONFIG.replace("min_rating: 4", "min_rating: 5")
+    client.post("/api/config", json={"text": edited})
+    assert cfg.with_suffix(".yaml.bak").read_text() == original
+
+
+def test_save_config_rejects_a_non_json_body(tmp_path: Path) -> None:
+    client, _, _, _ = _client(tmp_path)
+    resp = client.post("/api/config", content=VALID_CONFIG, headers={"Content-Type": "text/plain"})
+    assert resp.status_code == 415
+
+
+def test_form_post_from_another_site_is_blocked(tmp_path: Path) -> None:
+    """CSRF: a plain form POST cannot set application/json without a preflight.
+
+    Before the guard, any page the user was browsing could overwrite their
+    config or start a paid scan by submitting a hidden form at 127.0.0.1.
+    """
+    client, cfg, _, _ = _client(tmp_path)
+    before = cfg.read_text()
+    resp = client.post(
+        "/api/config",
+        content="text=whatever",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    assert resp.status_code == 415
+    assert cfg.read_text() == before
+
+
+def test_cross_origin_json_post_is_blocked(tmp_path: Path) -> None:
+    client, _, _, ctl = _client(tmp_path)
+    resp = client.post(
+        "/api/scanner/start", json={}, headers={"Origin": "https://evil.example"}
+    )
+    assert resp.status_code == 403
+    assert ctl.is_running() is False
+
+
+def test_same_origin_post_is_allowed(tmp_path: Path) -> None:
+    client, _, _, _ = _client(tmp_path)
+    resp = client.post(
+        "/api/seen/clear",
+        json={},
+        headers={"Origin": "http://127.0.0.1:8000", "Host": "127.0.0.1:8000"},
+    )
+    assert resp.status_code == 200
+
+
+def test_get_requests_are_never_blocked(tmp_path: Path) -> None:
+    client, _, _, _ = _client(tmp_path)
+    assert client.get("/api/status", headers={"Origin": "https://evil.example"}).status_code == 200
+
+
+def test_sse_resume_point_prefers_last_event_id() -> None:
+    assert sse_resume_point("42", 0) == 42
+    assert sse_resume_point(None, 7) == 7
+    assert sse_resume_point("garbage", 7) == 7  # malformed header falls back
+
+
+def test_sse_frame_carries_an_id() -> None:
+    """The id: line is what makes an EventSource reconnect resumable."""
+    frame = sse_frame(9, "hello")
+    assert frame.startswith("id: 9\ndata: ")
+    assert json.loads(frame.split("data: ", 1)[1].strip()) == {"seq": 9, "line": "hello"}
+
+
+def test_logs_stream_replays_the_buffer_then_resumes(tmp_path: Path) -> None:
+    """Without Last-Event-ID support, every reconnect replayed all 500 lines."""
+    buf = LogBuffer()
+    buf.append("first")
+    buf.append("second")
+    seqs = [s for s, _ in buf.recent()]
+
+    async def collect(start: int) -> str:
+        calls = {"n": 0}
+
+        async def disconnected() -> bool:
+            calls["n"] += 1
+            return calls["n"] > 1  # one pass, then hang up
+
+        chunks = [
+            c async for c in sse_log_lines(buf, start, disconnected, poll=0.0, heartbeat=99)
+        ]
+        return "".join(chunks)
+
+    full = asyncio.run(collect(0))
+    assert "retry: 3000" in full
+    assert f"id: {seqs[0]}" in full
+    assert "first" in full and "second" in full
+
+    resumed = asyncio.run(collect(seqs[0]))
+    assert "first" not in resumed, "a resumed stream must not repeat delivered lines"
+    assert "second" in resumed
+
+
+def test_logs_stream_sends_a_heartbeat_when_idle(tmp_path: Path) -> None:
+    """Keeps the connection from being reaped during a long quiet scan."""
+
+    async def collect() -> str:
+        calls = {"n": 0}
+
+        async def disconnected() -> bool:
+            calls["n"] += 1
+            return calls["n"] > 2
+
+        chunks = [
+            c
+            async for c in sse_log_lines(LogBuffer(), 0, disconnected, poll=1.0, heartbeat=1.0)
+        ]
+        return "".join(chunks)
+
+    assert ": ping" in asyncio.run(collect())
 
 
 def test_logs_endpoint_returns_buffer(tmp_path: Path) -> None:
@@ -147,12 +341,13 @@ def test_logs_endpoint_returns_buffer(tmp_path: Path) -> None:
 def test_scanner_start_stop_endpoints(tmp_path: Path) -> None:
     client, _, _, ctl = _client(tmp_path)
     assert client.get("/api/status").json()["running"] is False
-    started = client.post("/api/scanner/start", params={"mode": "loop"}).json()
+    started = client.post("/api/scanner/start", params={"mode": "loop"}, json={}).json()
     assert started["started"] is True
     assert _wait(ctl.is_running)
     # second start while running is a no-op
-    assert client.post("/api/scanner/start", params={"mode": "loop"}).json()["started"] is False
-    client.post("/api/scanner/stop")
+    again = client.post("/api/scanner/start", params={"mode": "loop"}, json={}).json()
+    assert again["started"] is False
+    client.post("/api/scanner/stop", json={})
     assert _wait(lambda: not ctl.is_running())
 
 
@@ -175,10 +370,13 @@ def _seed_seen() -> None:
     def li(i: str, price: float) -> Listing:
         return Listing(id=i, marketplace="facebook", title=f"PC {i}", url=f"u/{i}", price=price)
 
+    def ev(match: bool, rating: int) -> Evaluation:
+        return Evaluation(match=match, rating=rating, rationale="x", model="m")
+
     with SqliteSeenStore(paths.db_path()) as store:
-        store.mark_seen("PC", li("1", 1500.0), Evaluation(match=True, rating=5, rationale="x", model="m"))
-        store.mark_seen("PC", li("2", 1200.0), Evaluation(match=True, rating=5, rationale="x", model="m"))
-        store.mark_seen("PC", li("3", 800.0), Evaluation(match=False, rating=2, rationale="x", model="m"))
+        store.mark_seen("PC", li("1", 1500.0), ev(True, 5))
+        store.mark_seen("PC", li("2", 1200.0), ev(True, 5))
+        store.mark_seen("PC", li("3", 800.0), ev(False, 2))
         store.mark_seen("Bike", li("4", 400.0))
 
 
@@ -211,7 +409,7 @@ def test_seen_delete_requires_both_keys(tmp_path: Path, monkeypatch: pytest.Monk
 def test_seen_clear_by_item(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     client = _seen_client(tmp_path, monkeypatch)
     _seed_seen()
-    resp = client.post("/api/seen/clear", params={"item": "PC"})
+    resp = client.post("/api/seen/clear", params={"item": "PC"}, json={})
     assert resp.json() == {"ok": True, "deleted": 3}
     with SqliteSeenStore(paths.db_path()) as store:
         assert store.is_seen("Bike", "4")  # other item survives
@@ -220,7 +418,7 @@ def test_seen_clear_by_item(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
 def test_seen_clear_all(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     client = _seen_client(tmp_path, monkeypatch)
     _seed_seen()
-    resp = client.post("/api/seen/clear")
+    resp = client.post("/api/seen/clear", json={})
     assert resp.json() == {"ok": True, "deleted": 4}
     assert client.get("/api/seen").json()["rows"] == []
 
@@ -334,14 +532,14 @@ def test_drafts_list_and_approve_with_edited_text(
 
 def test_approve_unknown_draft_404(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     client, _, _, _ = _draft_client(tmp_path, monkeypatch)
-    assert client.post("/api/drafts/999/approve").status_code == 404
+    assert client.post("/api/drafts/999/approve", json={}).status_code == 404
 
 
 def test_approve_wrong_status_409(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     client, factory, _, _ = _draft_client(tmp_path, monkeypatch)
     draft = _add_draft(factory)
-    assert client.post(f"/api/drafts/{draft['id']}/dismiss").status_code == 200
-    assert client.post(f"/api/drafts/{draft['id']}/approve").status_code == 409
+    assert client.post(f"/api/drafts/{draft['id']}/dismiss", json={}).status_code == 200
+    assert client.post(f"/api/drafts/{draft['id']}/approve", json={}).status_code == 409
 
 
 def test_approve_while_busy_409(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -355,8 +553,8 @@ def test_approve_while_busy_409(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
         second_id = store.add_draft(
             item_name="PC", listing=listing2, message="yo", offer_price=None
         )
-    assert client.post(f"/api/drafts/{draft['id']}/approve").status_code == 200
-    assert client.post(f"/api/drafts/{second_id}/approve").status_code == 409
+    assert client.post(f"/api/drafts/{draft['id']}/approve", json={}).status_code == 200
+    assert client.post(f"/api/drafts/{second_id}/approve", json={}).status_code == 409
     release.set()
     assert _wait(lambda: not sender.is_busy())
 
@@ -369,28 +567,28 @@ def test_failed_send_records_error_and_allows_retry(
 
     client, factory, sender, _ = _draft_client(tmp_path, monkeypatch, send_fn=boom)
     draft = _add_draft(factory)
-    assert client.post(f"/api/drafts/{draft['id']}/approve").status_code == 200
+    assert client.post(f"/api/drafts/{draft['id']}/approve", json={}).status_code == 200
     assert _wait(lambda: not sender.is_busy())
     with factory() as store:
         row = store.get(draft["id"])
     assert row is not None and row["status"] == "failed"
     assert "selector missing" in (row["error"] or "")
     # Retrying a failed draft is allowed.
-    assert client.post(f"/api/drafts/{draft['id']}/approve").status_code == 200
+    assert client.post(f"/api/drafts/{draft['id']}/approve", json={}).status_code == 200
     assert _wait(lambda: not sender.is_busy())
 
 
 def test_dismiss_unknown_draft_404(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     client, _, _, _ = _draft_client(tmp_path, monkeypatch)
-    assert client.post("/api/drafts/999/dismiss").status_code == 404
+    assert client.post("/api/drafts/999/dismiss", json={}).status_code == 404
 
 
 def test_dismiss_sets_status(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     client, factory, _, _ = _draft_client(tmp_path, monkeypatch)
     draft = _add_draft(factory)
-    assert client.post(f"/api/drafts/{draft['id']}/dismiss").status_code == 200
+    assert client.post(f"/api/drafts/{draft['id']}/dismiss", json={}).status_code == 200
     with factory() as store:
         row = store.get(draft["id"])
     assert row is not None and row["status"] == "dismissed"
     # A dismissed draft can't be dismissed (or approved) again.
-    assert client.post(f"/api/drafts/{draft['id']}/dismiss").status_code == 409
+    assert client.post(f"/api/drafts/{draft['id']}/dismiss", json={}).status_code == 409

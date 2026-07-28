@@ -69,6 +69,31 @@ class ScheduleConfig(BaseModel):
     per_request_min_interval_seconds: int = Field(25, ge=0)
 
 
+class ScanConfig(BaseModel):
+    """How much work — and therefore how much money — one scan may spend.
+
+    These used to be CLI flags only, which meant the web UI and the polling
+    loop silently used the hardcoded defaults (100 evaluations per item, every
+    30 minutes) with no way to see or change them. They live here so the value
+    is set once and honoured everywhere; the CLI flags and the per-scan options
+    in the UI override it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_evaluations_per_item: int = Field(
+        25,
+        ge=0,
+        description=(
+            "AI evaluations per item per scan. Each one is a paid API call; "
+            "0 means never call the AI."
+        ),
+    )
+    max_listings_per_search: int = Field(
+        200, ge=1, description="How many search results to read before stopping."
+    )
+
+
 class NtfyNotifierConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -152,6 +177,7 @@ class AppConfig(BaseModel):
     )
     marketplaces: dict[str, MarketplaceConfig] = Field(default_factory=dict)
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
+    scan: ScanConfig = Field(default_factory=ScanConfig)
     messaging: MessagingConfig = Field(default_factory=MessagingConfig)
     notifiers: list[NotifierConfig] = Field(min_length=1)
     items: list[ItemConfig] = Field(min_length=1)

@@ -32,8 +32,10 @@ def test_log_level_defaults_to_info() -> None:
 
 def test_run_once_defaults() -> None:
     args = build_parser().parse_args(["run-once"])
-    assert args.limit == 200
-    assert args.max_evals == 100
+    # None means "use the scan: block in the config" — the flags are overrides
+    # now, so the web UI and the polling loop honour the same setting.
+    assert args.limit is None
+    assert args.max_evals is None
     assert args.headful is False
     assert args.config == "config.yaml"
 
@@ -41,8 +43,8 @@ def test_run_once_defaults() -> None:
 def test_run_defaults() -> None:
     args = build_parser().parse_args(["run"])
     assert args.command == "run"
-    assert args.limit == 200
-    assert args.max_evals == 100
+    assert args.limit is None
+    assert args.max_evals is None
     assert args.dry_run is False
     assert args.headful is False
     assert args.max_cycles is None
