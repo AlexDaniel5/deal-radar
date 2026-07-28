@@ -509,7 +509,13 @@ def _draft_client(
 
 def test_drafts_empty_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     client, _, _, _ = _draft_client(tmp_path, monkeypatch)
-    assert client.get("/api/drafts").json() == {"rows": [], "sending": False}
+    # messaging_enabled lets the UI hide the whole panel rather than showing an
+    # empty section that explains a feature you haven't switched on.
+    assert client.get("/api/drafts").json() == {
+        "rows": [],
+        "sending": False,
+        "messaging_enabled": False,
+    }
 
 
 def test_drafts_list_and_approve_with_edited_text(

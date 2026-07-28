@@ -241,7 +241,16 @@ def _cmd_serve(args: argparse.Namespace) -> int:
             "web UI needs extra deps; install them with: pip install -e '.[web]'"
         ) from exc
 
-    load_config(args.config)  # fail fast on a broken config before starting the server
+    # Deliberately do NOT fail fast on a missing or broken config: fixing it is
+    # the web UI's job now. Refusing to start would leave a first-time user with
+    # no way in — the setup screen and the settings form both exist precisely
+    # for the case where there is nothing valid on disk yet.
+    try:
+        load_config(args.config)
+    except DealRadarError as exc:
+        print(f"note: {exc}")
+        print("      Starting anyway — set things up in the browser.")
+
     app = create_app(config_path=args.config)
     print(f"deal-radar web UI at http://{args.host}:{args.port}  (config: {args.config})")
     if args.host not in ("127.0.0.1", "localhost", "::1"):

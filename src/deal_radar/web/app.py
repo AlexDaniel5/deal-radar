@@ -12,19 +12,32 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
+import yaml
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import ValidationError
 
 from .. import paths
 from ..ai.pricing import METER, estimate_eval_cost
-from ..config.loader import missing_env_refs, validate_config_text
-from ..config.schema import AppConfig
+from ..config.formvalidate import capability_warnings, cross_field_errors, friendly_message
+from ..config.loader import collect_env_refs, missing_env_refs, validate_config_text
+from ..config.schema import (
+    AIConfig,
+    AppConfig,
+    MarketplaceConfig,
+    MessagingConfig,
+    ScanConfig,
+    ScheduleConfig,
+)
+from ..config.starter import random_topic
+from ..config.writer import ConfigWriteConflict, build_patched_text, etag_for, write_config
 from ..errors import ConfigError
 from ..logging import LogBuffer, attach_log_buffer, get_logger
 from ..messaging.store import SqliteDraftStore
 from . import preflight, setup
 from .controller import ScannerController
+from .formspec import build_formspec, spec_for
 from .runner import build_free_scan_job
 from .sender import MessageSender
 from .setup import FacebookLogin, SetupError
@@ -135,6 +148,86 @@ def _env_warnings(text: str) -> list[dict[str, str]]:
         }
         for name in missing_env_refs(text)
     ]
+
+
+def _schema_defaults() -> dict[str, Any]:
+    """Defaults for every optional setting, so the form can label the fallbacks.
+
+    Lets a per-item override read "Use my default (4 of 5)" with the real number
+    rather than a hardcoded one that could go stale.
+    """
+    return {
+        "ai": AIConfig().model_dump(),
+        "schedule": ScheduleConfig().model_dump(),
+        "scan": ScanConfig().model_dump(),
+        "messaging": MessagingConfig().model_dump(),
+        "marketplace": MarketplaceConfig().model_dump(),
+        "notify_top_n": AppConfig.model_fields["notify_top_n"].get_default(),
+        "version": AppConfig.model_fields["version"].get_default(),
+    }
+
+
+def _effective(cfg: AppConfig | None) -> dict[str, Any]:
+    """The values per-item overrides actually fall back to, mirroring the schema helpers."""
+    if cfg is None:
+        return {"items": []}
+    return {
+        "items": [
+            {
+                "name": item.name,
+                "min_rating": item.effective_min_rating(cfg.ai),
+                "negotiate": item.effective_negotiate(cfg.messaging),
+                "offer_percent": item.effective_offer_percent(cfg.messaging),
+            }
+            for item in cfg.items
+        ]
+    }
+
+
+def _check_raw(
+    raw: dict[str, Any], text: str
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], AppConfig | None]:
+    """Validate a settings mapping the way the form needs it reported.
+
+    Cross-field checks run first so their failures carry a real field location
+    (pydantic reports them against the model, with no leaf to highlight), then
+    pydantic has the final say. Unset ``${VAR}`` refs are warnings, not errors:
+    a document shouldn't be un-editable because a runtime secret isn't exported
+    in the shell running the server.
+    """
+    errors = list(cross_field_errors(raw))
+    covered = {tuple(e["loc"][:2]) for e in errors}
+    cfg: AppConfig | None = None
+    try:
+        cfg = AppConfig.model_validate(raw)
+    except ValidationError as exc:
+        for error in exc.errors(include_url=False):
+            loc = list(error["loc"])
+            # Drop pydantic's leaf-less duplicate of a check we already scoped.
+            if len(loc) == 2 and tuple(loc) in covered:
+                continue
+            spec = spec_for(_spec_path(loc))
+            errors.append(
+                {
+                    "loc": loc,
+                    "type": error["type"],
+                    "msg": friendly_message(dict(error), spec["label"] if spec else None),
+                    "detail": error["msg"],
+                }
+            )
+    warnings = list(capability_warnings(raw))
+    if text:
+        warnings.extend(_env_warnings(text))
+    return errors, warnings, cfg
+
+
+def _spec_path(loc: list[Any]) -> str:
+    """Turn a pydantic error location into the form's dotted spec path.
+
+    ``("items", 0, "price_max")`` -> ``items.*.price_max``; a discriminated
+    union inserts its tag, so ``("notifiers", 1, "ntfy", "topic")`` keeps it.
+    """
+    return ".".join("*" if isinstance(part, int) else str(part) for part in loc)
 
 
 def _is_local_origin(origin: str, host: str) -> bool:
@@ -296,6 +389,197 @@ def create_app(
             ]
         }
 
+    # --- structured settings form -------------------------------------------------
+    #
+    # The raw YAML editor stays (under Advanced) and keeps using GET/POST
+    # /api/config. These endpoints back the guided form: they read the file as
+    # data, and write it back as a minimal patch so comments survive.
+
+    @app.get("/api/config/formspec")
+    def config_formspec() -> dict[str, Any]:
+        return build_formspec()
+
+    def _raw_config() -> tuple[str, dict[str, Any] | None, ConfigError | None]:
+        """The file's text and parsed mapping — env refs left unresolved."""
+        if not cfg_path.is_file():
+            return "", None, None
+        text = cfg_path.read_text(encoding="utf-8")
+        try:
+            raw = yaml.safe_load(text)
+        except yaml.YAMLError as exc:
+            mark = getattr(exc, "problem_mark", None)
+            return text, None, ConfigError(
+                f"invalid YAML: {exc}",
+                kind="yaml",
+                line=None if mark is None else mark.line + 1,
+            )
+        if raw is None:
+            return text, {}, None
+        if not isinstance(raw, dict):
+            return text, None, ConfigError(
+                "the top level of the settings file must be a mapping", kind="yaml"
+            )
+        return text, raw, None
+
+    @app.get("/api/config/form")
+    def config_form() -> JSONResponse:
+        """Current settings as data, plus everything the form needs to render.
+
+        Always 200, even when the file is missing or invalid: the form has to
+        render *something*, and an error page would leave the user stuck.
+        """
+        text, raw, parse_error = _raw_config()
+        if not cfg_path.is_file():
+            return JSONResponse(
+                {
+                    "exists": False,
+                    "path": str(cfg_path),
+                    "config": None,
+                    "etag": None,
+                    "valid": False,
+                    "errors": [],
+                    "warnings": [],
+                    "defaults": _schema_defaults(),
+                    "effective": {"items": []},
+                    "env": {},
+                    "starter_topic": random_topic(),
+                }
+            )
+        if raw is None:
+            assert parse_error is not None
+            return JSONResponse(
+                {
+                    "exists": True,
+                    "path": str(cfg_path),
+                    "config": None,
+                    "etag": etag_for(text),
+                    "valid": False,
+                    "kind": parse_error.kind,
+                    "line": parse_error.line,
+                    "errors": [{"loc": [], "msg": str(parse_error)}],
+                    "warnings": [],
+                    "defaults": _schema_defaults(),
+                    "effective": {"items": []},
+                    "env": {},
+                }
+            )
+        errors, warnings, cfg = _check_raw(raw, text)
+        return JSONResponse(
+            {
+                "exists": True,
+                "path": str(cfg_path),
+                # Raw, not a default-filled model dump: the form needs to tell
+                # "not set, uses the default" from "explicitly set to the
+                # default", which is what keeps saves minimal.
+                "config": raw,
+                "etag": etag_for(text),
+                "valid": not errors,
+                "errors": errors,
+                "warnings": warnings,
+                "defaults": _schema_defaults(),
+                "effective": _effective(cfg),
+                # Booleans only — never the values.
+                "env": {name: name in os.environ for name in collect_env_refs(text)},
+                "starter_topic": random_topic(),
+            },
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.post("/api/config/validate")
+    async def config_validate(request: Request) -> JSONResponse:
+        """Check a draft without touching disk; also converts between the views."""
+        body = await _json_body(request)
+        if isinstance(body.get("text"), str):
+            text = body["text"]
+            try:
+                raw = yaml.safe_load(text) or {}
+            except yaml.YAMLError as exc:
+                return JSONResponse(
+                    {"ok": False, "kind": "yaml", "errors": [{"loc": [], "msg": str(exc)}]}
+                )
+            if not isinstance(raw, dict):
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "kind": "yaml",
+                        "errors": [{"loc": [], "msg": "the top level must be a mapping"}],
+                    }
+                )
+        elif isinstance(body.get("config"), dict):
+            raw = body["config"]
+            text = ""
+        else:
+            return JSONResponse(
+                {"ok": False, "errors": [{"loc": [], "msg": "send config or text"}]},
+                status_code=400,
+            )
+        errors, warnings, _ = _check_raw(raw, text)
+        preview = None
+        if not errors and cfg_path.is_file():
+            try:
+                preview, _ = build_patched_text(cfg_path.read_text(encoding="utf-8"), raw)
+            except ConfigError:
+                preview = None
+        return JSONResponse(
+            {
+                "ok": not errors,
+                "errors": errors,
+                "warnings": warnings,
+                "config": raw,
+                "preview_yaml": preview,
+            }
+        )
+
+    @app.put("/api/config")
+    async def config_put(request: Request) -> JSONResponse:
+        """Save from the form: a minimal patch, so comments and layout survive."""
+        body = await _json_body(request)
+        submitted = body.get("config")
+        if not isinstance(submitted, dict):
+            return JSONResponse(
+                {"ok": False, "error": 'expected {"etag": ..., "config": {...}}'},
+                status_code=400,
+            )
+        errors, warnings, _ = _check_raw(submitted, "")
+        if errors:
+            return JSONResponse(
+                {"ok": False, "kind": "schema", "errors": errors, "warnings": warnings},
+                status_code=400,
+            )
+        try:
+            result = write_config(
+                cfg_path,
+                submitted,
+                etag=body.get("etag"),
+                validate=lambda text: validate_config_text(text, resolve_env=False),
+            )
+        except ConfigWriteConflict as exc:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "kind": "conflict",
+                    "error": str(exc),
+                    "current_text": exc.current_text,
+                },
+                status_code=409,
+            )
+        except ConfigError as exc:
+            return JSONResponse(
+                {"ok": False, "kind": exc.kind, "error": str(exc), "errors": exc.errors},
+                status_code=400,
+            )
+        # Paths only, never values: this goes to the live log pane.
+        if result["changed"]:
+            log.info("settings updated via form: %s", ", ".join(result["changed"]))
+        return JSONResponse(
+            {
+                "ok": True,
+                "etag": result["etag"],
+                "changed": result["changed"],
+                "warnings": warnings,
+            }
+        )
+
     @app.get("/api/seen")
     def seen(limit: int = 50) -> dict[str, Any]:
         from ..dedup.sqlite_store import SqliteSeenStore
@@ -366,12 +650,16 @@ def create_app(
 
     @app.get("/api/drafts")
     def drafts(limit: int = 50) -> dict[str, Any]:
+        cfg = _cfg_or_none()
+        # The UI hides the whole panel when messaging is off: an empty section
+        # explaining a feature you haven't turned on is just noise.
+        enabled = bool(cfg and cfg.messaging.enabled)
         db = paths.db_path()
         if not db.is_file():
-            return {"rows": [], "sending": snd.is_busy()}
+            return {"rows": [], "sending": snd.is_busy(), "messaging_enabled": enabled}
         with SqliteDraftStore(db) as store:
             rows = store.list_drafts(limit=limit)
-        return {"rows": rows, "sending": snd.is_busy()}
+        return {"rows": rows, "sending": snd.is_busy(), "messaging_enabled": enabled}
 
     @app.post("/api/drafts/{draft_id}/approve")
     async def approve_draft(draft_id: int, request: Request) -> JSONResponse:

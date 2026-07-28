@@ -117,6 +117,21 @@ Run the local web server with `.venv/bin/deal-radar serve`, then open http://127
 .venv/bin/deal-radar serve
 ```
 
+The page is, in order: **Deals worth a look** (auto-loaded, ranked by match then
+score then price), **Messages waiting for you** (hidden unless messaging is on),
+**Everything checked recently** (the ten most recent, expandable), **Settings**,
+and **Activity** — a collapsed log with an "only show problems" filter. Scan
+controls and the cost estimate live in the header, always visible.
+
+**Settings.** The page edits your config through a guided form — every setting
+with a plain-language label and an explanation, grouped into *What I'm hunting
+for*, *How you get alerted*, *Where to look*, *How often to check*, and
+*Messaging sellers*. Saving writes a **minimal patch**, so your comments, block
+scalars, key order and indentation all survive; an untouched save is
+byte-identical. The raw YAML editor is still there under **Advanced** — nothing
+you could do before is gone, and a test asserts the form covers every setting in
+the schema.
+
 **First run.** If anything essential is missing, the page opens on a setup screen
 instead of the control panel: it names each problem in plain language and, where
 it can, fixes it in place — paste an Anthropic API key (saved to `.env` next to
