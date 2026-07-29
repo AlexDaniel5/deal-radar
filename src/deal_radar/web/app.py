@@ -38,6 +38,7 @@ from ..messaging.store import SqliteDraftStore
 from . import preflight, setup
 from .controller import ScannerController
 from .formspec import build_formspec, spec_for
+from .progress import TRACKER, humanize_eta
 from .runner import build_free_scan_job
 from .sender import MessageSender
 from .setup import FacebookLogin, SetupError
@@ -845,7 +846,14 @@ def create_app(
 
     @app.get("/api/status")
     def status() -> dict[str, Any]:
-        return {**ctl.status(), "spend": METER.snapshot()}
+        progress = TRACKER.snapshot()
+        return {
+            **ctl.status(),
+            "spend": METER.snapshot(),
+            # None when nothing is running, so the UI can hide the bar entirely.
+            "progress": progress,
+            "eta": humanize_eta(progress["eta_seconds"]) if progress else "",
+        }
 
     @app.get("/api/pricing")
     def pricing() -> dict[str, Any]:

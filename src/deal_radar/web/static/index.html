@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>deal-radar</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+<link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+<div id="offline" class="banner" hidden>
+  Lost contact with deal-radar. Is the program still running?
+  <button class="tiny" id="retry">Retry now</button>
+</div>
+<header>
+  <h1>deal-radar</h1>
+  <span class="dot" id="dot"></span><span id="statustext" class="muted">…</span>
+  <span class="spacer"></span>
+  <span id="spend" class="muted" hidden></span>
+  <button class="primary" data-scanner="start?mode=loop">Keep watching</button>
+  <button data-scanner="start?mode=once">Scan now</button>
+  <button class="danger" data-scanner="stop">Stop</button>
+</header>
+<div id="progressbar" class="progressbar" hidden>
+  <div class="progress-track"><div class="progress-fill" id="progressfill"></div></div>
+  <div class="progress-text">
+    <span id="progresswhat"></span>
+    <span class="spacer"></span>
+    <span id="progresseta" class="muted"></span>
+  </div>
+  <p class="progress-note muted">
+    Scans are deliberately slow so Facebook doesn’t block your account.
+  </p>
+</div>
+<div id="costbar" class="costbar" hidden>
+  <span id="costtext"></span>
+  <details class="advanced">
+    <summary>Advanced</summary>
+    <div class="advanced-body">
+      <button class="tiny" data-scanner="start?mode=once&amp;free=1"
+              title="Opens the marketplace and runs one search, without asking the AI anything">
+        Test scan (free)
+      </button>
+      <span class="muted">
+        Checks that the browser opens, your Facebook sign-in still works and a search
+        returns results. It stops before asking the AI anything, so it costs nothing —
+        and it won't find you deals; use “Scan now” for that.
+      </span>
+    </div>
+  </details>
+</div>
+<section id="wizard" class="wizard" hidden></section>
+<div id="setupstrip" class="strip" hidden></div>
+<main>
+  <section id="bestsec">
+    <h2>Deals worth a look</h2>
+    <p class="section-note muted">
+      Everything found so far, best first: things the AI thought matched what you
+      described, then by its score, then cheapest.
+    </p>
+    <table><tbody id="best">
+      <tr><td class="muted">Nothing found yet.</td></tr>
+    </tbody></table>
+  </section>
+  <section id="draftsec" hidden>
+    <h2>Messages waiting for you</h2>
+    <p class="section-note muted">
+      deal-radar wrote these. Nothing is sent until you read one and press Approve.
+    </p>
+    <div id="drafts" class="muted">…</div>
+  </section>
+  <section id="seensec">
+    <h2>Everything checked recently
+      <button class="danger tiny right" id="clearseen">Forget everything</button>
+    </h2>
+    <p class="section-note muted">
+      Listings deal-radar has already looked at. It skips these next time, so
+      forgetting one means it can turn up — and be paid for — again.
+    </p>
+    <div id="seenmsg" class="muted note"></div>
+    <table><tbody id="seen"></tbody></table>
+    <button class="tiny" id="seenmore" hidden>Show more</button>
+  </section>
+  <section id="configsec">
+    <h2>Settings
+      <span id="formstatus" class="muted"></span>
+      <button class="tiny right" id="formreload">Reload</button>
+      <button class="primary tiny right" id="formsave" disabled>Save</button>
+    </h2>
+    <div id="formerrors" class="problems" hidden></div>
+    <div id="configform"></div>
+  </section>
+  <section id="logsec">
+    <details id="logdetails">
+      <summary>
+        <span class="dot" id="logdot" title="connection to the running program"></span>
+        Activity
+        <span class="muted">— what deal-radar is doing, moment to moment</span>
+      </summary>
+      <div class="log-tools">
+        <button class="tiny" id="clearlog">Clear</button>
+        <label class="checkbox">
+          <input type="checkbox" id="logproblems" /> Only show problems
+        </label>
+      </div>
+      <div id="log"></div>
+    </details>
+  </section>
+</main>
+<script type="module" src="/static/main.js"></script>
+</body>
+</html>

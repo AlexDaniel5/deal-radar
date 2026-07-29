@@ -32,6 +32,42 @@ class ScanStats:
     errors: int = 0
 
 
+@dataclass(frozen=True)
+class ProgressEvent:
+    """Where a scan has got to, emitted as it happens.
+
+    ``on_stats`` only fires when an *item* finishes, and one item can take a
+    quarter of an hour: page loads are paced 25s apart for politeness and each
+    candidate's detail page is another load. That left the web UI showing a
+    green dot and nothing else for the whole scan.
+
+    ``phase`` is one of:
+      ``searching``  — running one of the item's search phrases
+      ``found``      — the search returned, ``found`` is the running total
+      ``fetching``   — opening a candidate's detail page
+      ``evaluating`` — asking the AI about a candidate
+      ``checked``    — a candidate is done; ``checked``/``of`` advance
+      ``notifying``  — sending the digest
+      ``done``       — this item is finished
+    """
+
+    phase: str
+    item: str
+    #: 1-based position of this item in the pass, and how many there are.
+    item_index: int = 0
+    item_count: int = 0
+    #: Candidates sent to the AI so far, and the cap for this item.
+    checked: int = 0
+    of: int | None = None
+    #: Listings the search has returned so far, and matches confirmed so far.
+    found: int = 0
+    matched: int = 0
+    #: The listing currently being worked on, when there is one.
+    title: str | None = None
+
+ProgressFn = Callable[["ProgressEvent"], None]
+
+
 def _rank_key(pair: tuple[Listing, Evaluation]) -> tuple[int, float]:
     """Best-first sort key: highest rating first, then cheapest known price.
 
@@ -92,6 +128,9 @@ def scan_item(
     notify_top_n: int = 5,
     dry_run: bool = False,
     should_stop: Callable[[], bool] | None = None,
+    on_progress: ProgressFn | None = None,
+    item_index: int = 0,
+    item_count: int = 0,
 ) -> ScanStats:
     """Scan one item on one marketplace and notify on the best new matches.
 
@@ -99,16 +138,39 @@ def scan_item(
     collected during the pass; once the whole feed has been scanned they are
     ranked best-first and only the top ``notify_top_n`` are sent, as a single
     ranked digest per notifier rather than one alert per match.
+
+    ``on_progress``, like ``on_stats`` and ``should_stop``, is optional and
+    ignored by the CLI; the web UI uses it to show what's happening during a
+    scan that can easily run for a quarter of an hour.
     """
     stats = ScanStats(item=item.name)
     threshold = item.effective_min_rating(ai)
     matches: list[tuple[Listing, Evaluation]] = []
 
+    def progress(phase: str, *, title: str | None = None) -> None:
+        if on_progress is None:
+            return
+        on_progress(
+            ProgressEvent(
+                phase=phase,
+                item=item.name,
+                item_index=item_index,
+                item_count=item_count,
+                checked=stats.evaluated,
+                of=max_evaluations,
+                found=stats.found,
+                matched=stats.matched,
+                title=title,
+            )
+        )
+
+    progress("searching")
     for listing in marketplace.search(item, ctx):
         if should_stop is not None and should_stop():
             log.info("stop requested; halting scan of %s", item.name)
             break
         stats.found += 1
+        progress("found")
         if store.is_seen(item.name, listing.id):
             stats.skipped_seen += 1
             continue
@@ -123,12 +185,14 @@ def scan_item(
         if ctx.config.fetch_details:
             # Enrich with the full detail-page body so the AI judges on real specs,
             # not the sparse card. Richer text may also reveal an exclusion the card hid.
+            progress("fetching", title=listing.title)
             listing = marketplace.fetch_details(listing)
             if not passes_keyword_filters(listing, item):
                 stats.skipped_filter += 1
                 store.mark_seen(item.name, listing)
                 continue
 
+        progress("evaluating", title=listing.title)
         try:
             evaluation = evaluator.evaluate(item, listing)
         except Exception as exc:  # noqa: BLE001 - one bad listing shouldn't kill the scan
@@ -139,6 +203,7 @@ def scan_item(
         store.mark_seen(item.name, listing, evaluation)
 
         if not (evaluation.match and evaluation.rating >= threshold):
+            progress("checked", title=listing.title)
             continue
         stats.matched += 1
         log.info(
@@ -149,7 +214,10 @@ def scan_item(
             listing.url,
         )
         matches.append((listing, evaluation))
+        progress("checked", title=listing.title)
 
+    if matches:
+        progress("notifying")
     _notify_best(
         item=item,
         matches=matches,
@@ -159,6 +227,7 @@ def scan_item(
         dry_run=dry_run,
         stats=stats,
     )
+    progress("done")
     return stats
 
 
@@ -228,6 +297,7 @@ def scan_all(
     dry_run: bool = False,
     on_stats: Callable[[ScanStats], None] | None = None,
     should_stop: Callable[[], bool] | None = None,
+    on_progress: ProgressFn | None = None,
 ) -> list[ScanStats]:
     """Run one full pass over every selected item on each enabled marketplace.
 
@@ -244,6 +314,10 @@ def scan_all(
         if m in cfg.marketplaces and cfg.marketplaces[m].enabled
     }
     results: list[ScanStats] = []
+    # How many (marketplace, item) scans this pass will do, so progress can be
+    # reported as "3 of 5" rather than an open-ended count.
+    total = sum(1 for m in sorted(needed) for item in items if m in item.marketplaces)
+    done = 0
     for mname in sorted(needed):
         if should_stop is not None and should_stop():
             break
@@ -256,6 +330,7 @@ def scan_all(
                     break
                 if mname not in item.marketplaces:
                     continue
+                done += 1
                 stats = scan_item(
                     item=item,
                     marketplace=marketplace,
@@ -269,6 +344,9 @@ def scan_all(
                     notify_top_n=cfg.notify_top_n,
                     dry_run=dry_run,
                     should_stop=should_stop,
+                    on_progress=on_progress,
+                    item_index=done,
+                    item_count=total,
                 )
                 results.append(stats)
                 if on_stats is not None:

@@ -25,6 +25,7 @@ from ..pipeline import ScanStats, format_stats, scan_all
 from ..ratelimit import RateLimiter
 from ..scheduler import run_loop
 from .controller import Job
+from .progress import TRACKER
 
 log = get_logger("web.runner")
 
@@ -56,6 +57,9 @@ def build_jobs(
         interval = cfg.schedule.per_request_min_interval_seconds
         pause = RateLimiter(interval, interval * 0.5)
         items = [item for item in cfg.items if item.enabled]
+        # Detail fetching doubles the page loads per candidate, which is what
+        # the time estimate has to account for.
+        mk_fetches_details = any(m.fetch_details for m in cfg.marketplaces.values())
 
         def make_mk(name: str, mk_cfg: MarketplaceConfig) -> Marketplace:
             return build_marketplace(
@@ -71,6 +75,9 @@ def build_jobs(
                 # Reset per-scan spend here, not once per job: a polling loop
                 # runs many scans and the UI shows "spent this scan".
                 METER.start_scan()
+                # A detail-page fetch plus the search page load, both paced by
+                # the politeness interval, is what actually sets the tempo.
+                TRACKER.start(seconds_per_listing=interval * 2 if mk_fetches_details else interval)
                 collected: list[ScanStats] = []
 
                 def on_stats(s: ScanStats) -> None:
@@ -89,6 +96,7 @@ def build_jobs(
                     dry_run=dry_run,
                     on_stats=on_stats,
                     should_stop=stop.is_set,
+                    on_progress=TRACKER.record,
                 )
                 # Everything found was already in the seen store: nothing new to judge.
                 if collected and all(s.evaluated == 0 and s.found > 0 for s in collected):
@@ -98,6 +106,7 @@ def build_jobs(
                         "(%d listings, all already seen)",
                         total,
                     )
+                TRACKER.clear()
 
             if loop:
                 run_loop(scan=scan, schedule=cfg.schedule, sleep=_sleep, should_stop=stop.is_set)

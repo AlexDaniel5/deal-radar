@@ -177,8 +177,14 @@ session and sends it) or **Dismiss**. Guarantees:
   `scan.max_evaluations_per_item` (or `--max-evals`).
 - **The web UI shows the cost before you click**, computed from your model, your
   item count and your cap — and a running "$0.014 this scan" counter while it
-  works. Under Advanced there's a **Test scan (free)**, which looks at what's out
-  there without asking the AI anything: the safest first thing to try.
+  works. Under Advanced there's a **Test scan (free)**, which opens the
+  marketplace and runs one search without asking the AI anything: it proves the
+  browser and your Facebook sign-in work, and costs nothing.
+- **Scans are slow on purpose** — page loads are paced ~25s apart and each
+  candidate costs a second load, so 25 candidates is a quarter of an hour. The UI
+  shows a real progress bar ("Asking the AI about a listing (1 of 2: Gaming PC).
+  Checked 7 of 25, 1 worth a look so far", "about 12 minutes left") rather than
+  leaving you unable to tell working from wedged.
   Already-seen listings are skipped, so steady-state cost is just newly-appeared
   listings. With the default `claude-haiku-4-5` model each eval is well under a
   cent; the per-eval cost is logged (`eval usage: … est_cost=$…`).

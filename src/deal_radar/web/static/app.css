@@ -1,0 +1,374 @@
+/* Theme tokens. Dark is the default; light follows the OS unless the page
+   sets data-theme explicitly. Previously the page was dark-only, which is a
+   poor default for someone on a laptop in daylight. */
+:root {
+  color-scheme: dark;
+  --bg: #0f1115;
+  --panel: #171a21;
+  --well: #0b0d11;
+  --border: #2a2f3a;
+  --rule: #232833;
+  --text: #e6e6e6;
+  --text-dim: #8892a0;
+  --heading: #9aa4b2;
+  --btn: #2a3140;
+  --btn-border: #3a4353;
+  --btn-hover: #333c4d;
+  --green: #4ade80;
+  --green-bg: #2f6f4f;
+  --green-border: #3a8a63;
+  --red: #f87171;
+  --red-bg: #7a2f38;
+  --red-border: #9a3d48;
+  --amber: #fbbf24;
+  --link: #7ab7ff;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) {
+    color-scheme: light;
+    --bg: #f4f5f7;
+    --panel: #ffffff;
+    --well: #f7f8fa;
+    --border: #d8dce4;
+    --rule: #e6e9ef;
+    --text: #1c2027;
+    --text-dim: #667085;
+    --heading: #5a6474;
+    --btn: #eceff4;
+    --btn-border: #ccd2dd;
+    --btn-hover: #dfe4ec;
+    --green: #12703f;
+    --green-bg: #2f6f4f;
+    --green-border: #2a6347;
+    --red: #b3261e;
+    --red-bg: #8c3038;
+    --red-border: #7a2830;
+    --amber: #96620a;
+    --link: #1a5fb4;
+  }
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f4f5f7;
+  --panel: #ffffff;
+  --well: #f7f8fa;
+  --border: #d8dce4;
+  --rule: #e6e9ef;
+  --text: #1c2027;
+  --text-dim: #667085;
+  --heading: #5a6474;
+  --btn: #eceff4;
+  --btn-border: #ccd2dd;
+  --btn-hover: #dfe4ec;
+  --green: #12703f;
+  --green-bg: #2f6f4f;
+  --green-border: #2a6347;
+  --red: #b3261e;
+  --red-bg: #8c3038;
+  --red-border: #7a2830;
+  --amber: #96620a;
+  --link: #1a5fb4;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; font: 14px/1.5 system-ui, sans-serif; background: var(--bg); color: var(--text); }
+
+/* An explicit `display` in author CSS beats the UA stylesheet's
+   `[hidden] { display: none }`, so hidden elements need saying twice. */
+[hidden] { display: none !important; }
+
+.banner {
+  position: sticky; top: 0; z-index: 10;
+  padding: 10px 18px; background: var(--red-bg); color: #fff;
+  display: flex; align-items: center; gap: 12px;
+}
+
+header {
+  padding: 12px 18px; background: var(--panel); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+}
+h1 { font-size: 16px; margin: 0; font-weight: 600; }
+
+/* Mobile first: one column. The two-column grid is an enhancement, which also
+   avoids the empty half-row the old fixed 1fr 1fr layout left behind. */
+main { padding: 18px; display: grid; gap: 18px; grid-template-columns: 1fr; }
+@media (min-width: 900px) {
+  main { grid-template-columns: 1fr 1fr; }
+  #logsec, #configsec, #draftsec { grid-column: 1 / -1; }
+}
+
+section {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 8px; padding: 14px; min-width: 0;
+}
+section h2 {
+  font-size: 13px; margin: 0 0 10px; color: var(--heading);
+  text-transform: uppercase; letter-spacing: .04em;
+  display: flex; align-items: center; gap: 8px;
+}
+
+/* --- setup wizard ---------------------------------------------------------
+   When something essential is missing, nothing on the main page can work, so
+   the wizard takes the page over rather than being a dismissible aside. */
+body.setup-required main { display: none; }
+/* Nothing can work yet, so don't leave a Scan button sitting there for someone
+   to click and get the failure the wizard is already explaining. */
+body.setup-required header [data-scanner] { display: none; }
+
+.wizard { margin: 18px; max-width: 780px; }
+.wizard h2 {
+  font-size: 20px; margin: 0 0 6px; color: var(--text);
+  text-transform: none; letter-spacing: 0; display: block;
+}
+.wizard .lede { margin: 0 0 18px; color: var(--text-dim); }
+
+.strip {
+  margin: 18px 18px 0; padding: 10px 14px; border-radius: 8px;
+  background: var(--panel); border: 1px solid var(--amber);
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+}
+.strip .checks { flex-basis: 100%; }
+
+.check {
+  border: 1px solid var(--border); border-left-width: 4px;
+  border-radius: 6px; padding: 12px 14px; margin-bottom: 10px; background: var(--panel);
+}
+.check-ok { border-left-color: var(--green); }
+.check-warn { border-left-color: var(--amber); }
+.check-fail { border-left-color: var(--red); }
+.check-unknown { border-left-color: var(--text-dim); }
+.check-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.check-icon { font-weight: 700; }
+.check-ok .check-icon { color: var(--green); }
+.check-warn .check-icon { color: var(--amber); }
+.check-fail .check-icon { color: var(--red); }
+.check-fix { margin-top: 8px; }
+.check-help { margin-top: 6px; font-size: 13px; color: var(--text-dim); }
+.check-actions {
+  margin-top: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+}
+.check-actions input {
+  flex: 1 1 260px; min-width: 0; padding: 8px 10px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--well); color: var(--text);
+  font: inherit;
+}
+.action-status { flex-basis: 100%; }
+
+.command {
+  margin-top: 8px; padding: 8px 10px; border-radius: 6px; background: var(--well);
+  border: 1px solid var(--border); display: flex; gap: 8px; align-items: center;
+  flex-wrap: wrap;
+}
+.command code { font: 12px/1.5 ui-monospace, monospace; flex: 1 1 auto; overflow-wrap: anywhere; }
+
+/* A scan runs for many minutes, so it needs a determinate bar: a spinner or a
+   dot can't be told apart from a hang. */
+.progressbar {
+  padding: 10px 18px; background: var(--panel); border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.progress-track {
+  height: 6px; border-radius: 3px; background: var(--well);
+  border: 1px solid var(--border); overflow: hidden;
+}
+.progress-fill {
+  height: 100%; width: 0; background: var(--green);
+  transition: width .4s ease;
+}
+.progress-text { display: flex; gap: 12px; margin-top: 6px; flex-wrap: wrap; }
+.progress-note { margin: 4px 0 0; font-size: 12px; }
+
+/* Cost is stated before the click, not discovered on the bill afterwards. */
+.costbar {
+  padding: 10px 18px; background: var(--panel);
+  border-bottom: 1px solid var(--border); font-size: 13px; color: var(--text-dim);
+}
+.costbar .advanced { margin-top: 6px; }
+.costbar summary { cursor: pointer; color: var(--link); width: fit-content; }
+.advanced-body {
+  margin-top: 8px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+}
+#spend { font-variant-numeric: tabular-nums; }
+
+/* --- settings form ---------------------------------------------------------- */
+
+.panel { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 12px; }
+.panel > summary {
+  padding: 12px 14px; cursor: pointer; background: var(--well);
+  border-radius: 8px; display: flex; gap: 10px; flex-wrap: wrap; align-items: baseline;
+}
+.panel[open] > summary { border-radius: 8px 8px 0 0; border-bottom: 1px solid var(--border); }
+.panel > div { padding: 14px; }
+
+.field { margin-bottom: 16px; max-width: 62ch; }
+.field > label { display: block; font-weight: 600; margin-bottom: 4px; }
+/* Checkbox and its label sit on one line; the help and any warning go
+   underneath, full width. A plain flex row put all four side by side. */
+.field-inline {
+  display: grid; grid-template-columns: auto 1fr; column-gap: 8px; align-items: center;
+}
+.field-inline > input[type='checkbox'] { grid-column: 1; grid-row: 1; }
+.field-inline > label { grid-column: 2; grid-row: 1; margin: 0; }
+.field-inline > .field-help,
+.field-inline > .field-warning { grid-column: 1 / -1; }
+.field-help { margin-top: 5px; font-size: 13px; color: var(--text-dim); }
+.field-warning {
+  margin-top: 5px; font-size: 13px; color: var(--amber); font-weight: 600;
+}
+.field-error { margin-top: 5px; font-size: 13px; color: var(--red); font-weight: 600; }
+
+.field input[type='text'],
+.field input[type='number'],
+.field select,
+.field textarea {
+  width: 100%; padding: 8px 10px; border-radius: 6px; font: inherit;
+  border: 1px solid var(--border); background: var(--well); color: var(--text);
+}
+.field textarea { min-height: 90px; resize: vertical; font: inherit; }
+.field input[type='number'] { max-width: 12ch; }
+.field .invalid,
+.field input.invalid,
+.field textarea.invalid { border-color: var(--red); }
+.field input[type='checkbox'] { width: 18px; height: 18px; }
+
+.example { margin-top: 8px; }
+.example summary { cursor: pointer; color: var(--link); width: fit-content; }
+.example pre {
+  margin: 8px 0; padding: 10px; background: var(--well); border: 1px solid var(--border);
+  border-radius: 6px; white-space: pre-wrap; font: 12px/1.5 ui-monospace, monospace;
+}
+
+.chips {
+  display: flex; flex-wrap: wrap; gap: 6px; padding: 6px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--well);
+}
+.chips.invalid { border-color: var(--red); }
+.chip-list { display: contents; }
+.chip {
+  display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 8px;
+  border-radius: 12px; background: var(--btn); font-size: 13px;
+}
+.chip button {
+  border: 0; background: none; color: var(--text-dim); padding: 0 4px;
+  min-height: 0; cursor: pointer; font-size: 15px; line-height: 1;
+}
+.chips > input {
+  flex: 1 1 12ch; min-width: 12ch; border: 0; background: none; color: var(--text);
+  font: inherit; padding: 4px;
+}
+.chips > input:focus { outline: none; }
+
+.rating { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.rating button { min-width: 40px; }
+.rating button.on { background: var(--green-bg); border-color: var(--green-border); color: #fff; }
+.rating-caption { flex-basis: 100%; font-size: 13px; }
+
+.checkboxes { display: flex; gap: 14px; flex-wrap: wrap; }
+.checkbox { display: inline-flex; align-items: center; gap: 6px; font-weight: 400; }
+.topic { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.topic > input { flex: 1 1 22ch; }
+.override { padding-left: 12px; border-left: 2px solid var(--border); }
+
+.card {
+  border: 1px solid var(--border); border-radius: 8px; padding: 12px;
+  margin-bottom: 12px; background: var(--panel);
+}
+.card > summary { cursor: pointer; margin: -12px -12px 12px; padding: 12px; }
+.card-head { margin-bottom: 10px; }
+
+.empty { padding: 18px; text-align: left; }
+.empty h3 { margin: 0 0 8px; }
+.empty button { margin-right: 8px; margin-top: 8px; }
+
+.problems {
+  margin-bottom: 12px; padding: 10px 14px; border-radius: 6px;
+  border: 1px solid var(--red-border); background: var(--well);
+}
+.summary-line { margin: 4px 0; font-size: 13px; }
+.summary-line.err { color: var(--red); }
+.summary-line.warn { color: var(--amber); }
+.summary-line pre { white-space: pre-wrap; font-size: 12px; }
+.linky {
+  border: 0; background: none; color: inherit; padding: 0; min-height: 0;
+  text-align: left; text-decoration: underline; cursor: pointer; font: inherit;
+}
+
+.raw { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 14px; }
+.raw textarea { height: 300px; }
+
+.spacer { flex: 1; }
+.actions { margin-top: 8px; }
+.note { margin-bottom: 6px; }
+
+.draft { border: 1px solid var(--border); border-radius: 6px; padding: 10px; margin-bottom: 10px; }
+.draft textarea { height: 64px; margin-top: 6px; }
+.draft-actions { margin-top: 6px; display: flex; gap: 8px; }
+.tag { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: var(--btn); }
+
+button {
+  background: var(--btn); color: var(--text); border: 1px solid var(--btn-border);
+  border-radius: 6px; padding: 8px 12px; cursor: pointer; font: inherit;
+  min-height: 36px;
+}
+button:hover { background: var(--btn-hover); }
+button.primary { background: var(--green-bg); border-color: var(--green-border); color: #fff; }
+button.danger { background: var(--red-bg); border-color: var(--red-border); color: #fff; }
+button.tiny { font-size: 11px; padding: 2px 8px; min-height: 0; }
+button.right { margin-left: auto; }
+
+textarea {
+  width: 100%; height: 340px; background: var(--well); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px; padding: 10px;
+  font: 12px/1.5 ui-monospace, monospace; resize: vertical;
+}
+#log {
+  height: 300px; overflow: auto; background: var(--well); border: 1px solid var(--border);
+  border-radius: 6px; padding: 10px; font: 12px/1.45 ui-monospace, monospace;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+#saveerr {
+  margin: 10px 0 0; padding: 10px; background: var(--well); border: 1px solid var(--red-border);
+  border-radius: 6px; color: var(--red); font: 12px/1.45 ui-monospace, monospace;
+  white-space: pre-wrap; overflow-x: auto;
+}
+
+.dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; background: #777; }
+.dot.on { background: var(--green); }
+.dot.stop { background: var(--amber); }
+
+.muted { color: var(--text-dim); }
+.err { color: var(--red); }
+.ok { color: var(--green); }
+
+.section-note { margin: -4px 0 10px; font-size: 13px; }
+
+/* Named badges rather than symbols: a star and a camera meant nothing without
+   hovering, and hovering isn't available on a phone. */
+.pill {
+  display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px;
+  background: var(--btn); border: 1px solid var(--btn-border); white-space: nowrap;
+}
+.pill.match { background: var(--green-bg); border-color: var(--green-border); color: #fff; }
+
+.log-tools { display: flex; gap: 12px; align-items: center; margin: 8px 0; flex-wrap: wrap; }
+#logsec summary { cursor: pointer; font-size: 13px; color: var(--heading); }
+#logsec summary .dot { margin-right: 6px; }
+
+/* Tables scroll inside their own box rather than pushing the page sideways. */
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+td, th { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--rule); }
+td:nth-child(4) { overflow-wrap: anywhere; }
+.nowrap { white-space: nowrap; }
+
+/* Under ~700px a 5-column table with a URL in it does not fit; become cards. */
+@media (max-width: 700px) {
+  #seen tr, #best tr { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; padding: 8px 0; border-bottom: 1px solid var(--rule); }
+  #seen td, #best td { border: 0; padding: 0; }
+  #seen td:nth-child(4), #best td:nth-child(4) { grid-column: 1 / -1; }
+  #seen td:nth-child(5), #best td:nth-child(5) { grid-column: 1 / -1; }
+}
+a { color: var(--link); }
+.rate { color: var(--amber); font-weight: 600; white-space: nowrap; }
+#savemsg { margin-left: 10px; }
