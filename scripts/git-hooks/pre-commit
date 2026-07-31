@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+#
+# Refuse a commit whose own tree can't import.
+#
+# `git commit -a` stages only already-tracked files, so a change that adds a new
+# module lands on main referencing a file that isn't in the repo. That has now
+# happened three times here — 812df7f shipped without scheduler.py, and 8fa546e
+# and 3ae9c3d both shipped without every module the web UI imports. Each time
+# the working tree was fine and the commit was broken, which is why this checks
+# the *index* rather than what's on disk.
+#
+# Install:  git config core.hooksPath scripts/git-hooks
+# Skip once (rarely a good idea):  git commit --no-verify
+
+set -euo pipefail
+
+# Nothing to check if no source is staged (docs-only commits, etc). Note there
+# is deliberately no --diff-filter here: a *deletion* under src/ is exactly the
+# kind of change worth re-checking, and filtering to ACMR would skip it.
+if ! git diff --cached --name-only | grep -qE '^src/deal_radar/'; then
+    exit 0
+fi
+
+repo_root="$(git rev-parse --show-toplevel)"
+if [ -x "$repo_root/.venv/bin/python" ]; then
+    python="$repo_root/.venv/bin/python"
+else
+    python="$(command -v python3 || true)"
+fi
+if [ -z "$python" ]; then
+    echo "pre-commit: no python found; skipping the import check" >&2
+    exit 0
+fi
+
+staged="$(mktemp -d)"
+trap 'rm -rf "$staged"' EXIT
+
+# Materialise exactly what is about to be committed — not the working tree.
+git checkout-index --all --force --prefix="$staged/"
+
+fail() {
+    echo >&2
+    echo "pre-commit: $1" >&2
+    echo >&2
+    echo "  The files on disk are fine; the ones you STAGED are not." >&2
+    echo "  This is almost always 'git commit -a' when a new file needed adding." >&2
+    echo >&2
+    echo "  Fix:   git add -A && git commit ..." >&2
+    echo "  Skip:  git commit --no-verify   (leaves main broken)" >&2
+    exit 1
+}
+
+# 1. The package imports. Catches a module that was never `git add`ed.
+if ! error="$(cd "$staged" && PYTHONPATH=src "$python" -c 'import deal_radar.web.app' 2>&1)"; then
+    echo "$error" >&2
+    fail "the staged tree does not import."
+fi
+
+# 2. The frontend is present. app.py imports fine without it, but the page
+#    would 500 on the first request, which is worse than a crash at startup.
+for asset in index.html app.css common.js main.js; do
+    [ -f "$staged/src/deal_radar/web/static/$asset" ] ||
+        fail "src/deal_radar/web/static/$asset is missing from the staged tree."
+done
+
+exit 0
