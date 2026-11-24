@@ -31,7 +31,7 @@ def _fetch_image(url: str) -> tuple[bytes, str] | None:
     """Download one listing photo so it can be sent base64.
 
     Photos must be downloaded locally: with URL image blocks Anthropic's own
-    fetcher retrieves them, and it honors robots.txt — which Facebook's CDN
+    fetcher retrieves them, and it honors robots.txt - which Facebook's CDN
     disallows, failing the whole evaluation with a 400.
     """
     import httpx  # lazy: keep import cost out of offline paths
@@ -56,7 +56,7 @@ def _build_content(
 
     Photos are attached only when ``analyze_images`` is on AND the description
     mentions them (sellers who write "parts listed in photos" put the specs
-    there) — otherwise text alone keeps the call cheap. Up to ``max_images``
+    there) - otherwise text alone keeps the call cheap. Up to ``max_images``
     photos are downloaded locally and sent as base64 image blocks preceding
     the text (the order Anthropic recommends); photos that fail to download
     are skipped, and if none survive the evaluation falls back to text-only.
@@ -100,7 +100,7 @@ def _build_content(
 def _log_usage(model: str, usage: object) -> None:
     """Log token usage, and record it on the process-wide meter.
 
-    The meter is what lets the web UI show a live "spent this scan" figure —
+    The meter is what lets the web UI show a live "spent this scan" figure -
     previously this cost was computed and then thrown away into a log line.
     """
     in_tok = getattr(usage, "input_tokens", None)
@@ -157,7 +157,7 @@ class ClaudeEvaluator:
                     f"Claude evaluation failed for listing {listing.id!r}: {exc}"
                 ) from exc
             # Photos can sink an otherwise-fine request (size limits, formats,
-            # transient rejections) — never lose the text evaluation over them.
+            # transient rejections) - never lose the text evaluation over them.
             log.warning("image evaluation failed for %s; retrying text-only: %s", listing.id, exc)
             with_images = False
             try:

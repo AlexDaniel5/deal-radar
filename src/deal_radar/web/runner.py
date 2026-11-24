@@ -102,7 +102,7 @@ def build_jobs(
                 if collected and all(s.evaluated == 0 and s.found > 0 for s in collected):
                     total = sum(s.found for s in collected)
                     log.info(
-                        "all current listings already scanned — nothing new this run "
+                        "all current listings already scanned - nothing new this run "
                         "(%d listings, all already seen)",
                         total,
                     )
@@ -128,13 +128,13 @@ def build_free_scan_job(config_path: str) -> Job:
     """A scan that costs nothing: no AI calls, no detail-page fetches.
 
     ``max_evaluations=0`` short-circuits the pipeline before either. It is the
-    right first thing for a new user to press — it proves the browser works and
+    right first thing for a new user to press - it proves the browser works and
     the Facebook sign-in is live, and it cannot spend a cent.
     """
     _, once = build_jobs(config_path, max_evals=0)
 
     def job(stop: threading.Event) -> None:
-        log.info("free test scan starting — no AI calls will be made")
+        log.info("free test scan starting - no AI calls will be made")
         once(stop)
         log.info("free test scan complete (nothing was charged)")
 

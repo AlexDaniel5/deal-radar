@@ -66,7 +66,7 @@ export const isOffline = () => offline;
  * died, the status dot froze on its last value and the tables kept showing
  * stale data with nothing to say otherwise.
  *
- * All writes send `Content-Type: application/json` — the server requires it so
+ * All writes send `Content-Type: application/json` - the server requires it so
  * that a plain cross-site form POST (which cannot set that header without a
  * preflight) can't drive this API.
  */

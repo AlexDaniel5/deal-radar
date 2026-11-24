@@ -1,7 +1,7 @@
 """The polling loop: repeat a scan pass on an interval, with jitter + backoff.
 
 The loop itself is pure orchestration and takes the scan as an injected callable,
-so it can be exercised in tests with a fake scan and a fake clock — no browser,
+so it can be exercised in tests with a fake scan and a fake clock - no browser,
 no network, no real sleeping.
 """
 

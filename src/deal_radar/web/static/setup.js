@@ -1,10 +1,10 @@
 // The setup wizard: what's missing, why it matters, and how to fix it.
 //
-// Readiness is re-derived from live checks on every load — a stored "done"
+// Readiness is re-derived from live checks on every load - a stored "done"
 // flag would leave someone stuck if their sign-in expired or their key was
 // revoked. What *is* remembered is only when a slow check last passed.
 
-import { $, api, esc } from '/static/common.js';
+import { $, api, esc } from './common.js';
 
 const ICONS = { ok: '✓', warn: '!', fail: '✕', unknown: '?' };
 let lastSignature = '';
@@ -105,7 +105,7 @@ function row(check, data, compact) {
   head.innerHTML =
     '<span class="check-icon">' + ICONS[check.state] + '</span>' +
     '<b>' + esc(check.label) + '</b>' +
-    '<span class="muted"> — ' + esc(check.detail) + '</span>';
+    '<span class="muted"> - ' + esc(check.detail) + '</span>';
   el.appendChild(head);
   if (compact) return el;
 
@@ -199,7 +199,7 @@ function renderKeyForm(check) {
   help.className = 'check-help';
   help.textContent =
     'Get one from console.anthropic.com. It is stored on this computer only, in a ' +
-    'file called .env next to your settings, readable only by you — and it is ' +
+    'file called .env next to your settings, readable only by you - and it is ' +
     'already excluded from version control.';
   save.onclick = async () => {
     const result = await run(status, 'Saving…', () =>
@@ -246,7 +246,7 @@ function renderFacebookCheck(check) {
   const wrap = actionRow(go);
   go.onclick = async () => {
     wrap.status.className = 'muted action-status';
-    wrap.status.textContent = 'Opening Facebook in the background — about 20 seconds…';
+    wrap.status.textContent = 'Opening Facebook in the background - about 20 seconds…';
     try {
       await api('/api/setup/facebook/check', { method: 'POST', body: {} });
     } catch (err) {

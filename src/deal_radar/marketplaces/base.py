@@ -42,6 +42,6 @@ class Marketplace(Protocol):
         Called only for candidates about to be evaluated, so the AI judges on the
         full listing body rather than the sparse search-card text. Implementations
         are best-effort: return the listing **unchanged** if the detail page can't
-        be fetched or parsed — never raise.
+        be fetched or parsed - never raise.
         """
         ...

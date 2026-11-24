@@ -212,7 +212,7 @@ def test_tracker_eta_uses_the_configured_pacing_before_it_can_measure() -> None:
     )
     snap = tracker.snapshot()
     assert snap is not None
-    # 10 left x 50s: minutes, not seconds — which is the honest answer.
+    # 10 left x 50s: minutes, not seconds - which is the honest answer.
     assert snap["eta_seconds"] >= 400
 
 

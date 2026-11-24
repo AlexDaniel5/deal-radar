@@ -17,7 +17,7 @@ import deal_radar.web
 STATIC = Path(deal_radar.web.__file__).parent / "static"
 
 # Internal vocabulary that must never reach the screen. Matched against user-
-# visible strings only — code identifiers and comments are exempt below.
+# visible strings only - code identifiers and comments are exempt below.
 JARGON = re.compile(
     r"\b(dedup|max[_-]evals|min_rating|notify_top_n|SSE|EventSource|headless|headful|"
     r"storage_state|dry[_-]run|sqlite|pydantic|NotImplementedError|traceback|"

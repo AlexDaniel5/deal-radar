@@ -292,7 +292,7 @@ def test_keyword_filter_helper() -> None:
     # include_keywords are a soft signal now: only exclude_keywords hard-filter.
     item = _item(include_keywords=["rtx"], exclude_keywords=["broken"])
     assert passes_keyword_filters(_listing("1", title="RTX 3070"), item)
-    # No longer rejected for missing an include keyword — the AI judges the match.
+    # No longer rejected for missing an include keyword - the AI judges the match.
     assert passes_keyword_filters(_listing("1", title="GTX 1050"), item)
     assert not passes_keyword_filters(_listing("1", title="broken RTX"), item)
 

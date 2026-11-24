@@ -1,7 +1,7 @@
 """What the settings form looks like, and what every field is called in English.
 
 The spec lives in Python rather than in the JavaScript so that all this copy is
-unit-testable — in particular, a test walks the pydantic models and asserts that
+unit-testable - in particular, a test walks the pydantic models and asserts that
 every schema field appears here exactly once. That is what makes "the form can
 express everything the YAML can" a checked property rather than a hope, and it
 fails loudly the day someone adds a setting without writing words for it.
@@ -69,36 +69,38 @@ MODEL_PREFIXES: tuple[tuple[type[BaseModel], str], ...] = (
 GROUPS: tuple[dict[str, str], ...] = (
     {
         "id": "items",
-        "title": "What I'm hunting for",
-        "blurb": (
-            "The things deal-radar looks for, and how it decides one is "
-            "worth telling you about."
-        ),
+        "title": "Hunting preferences",
+        "blurb": "What deal-radar looks for, and what the AI should count as a match.",
     },
     {
         "id": "alerts",
-        "title": "How you get alerted",
-        "blurb": "Where matches are sent, and how good a match has to be.",
+        "title": "Alert preferences",
+        "blurb": "How good a listing has to be before you hear about it.",
+    },
+    {
+        "id": "notifications",
+        "title": "Notifications",
+        "blurb": "Where your alerts are delivered.",
     },
     {
         "id": "where",
-        "title": "Where to look",
-        "blurb": "Which marketplace, which city, how far out.",
+        "title": "Search locations",
+        "blurb": "The marketplaces to search, and the area you normally search in.",
     },
     {
         "id": "when",
-        "title": "How often to check",
-        "blurb": "How frequently deal-radar looks, and how much each look may cost.",
+        "title": "Scanning frequency",
+        "blurb": "How often deal-radar checks, and how much it does each time.",
     },
     {
         "id": "messaging",
-        "title": "Messaging sellers",
-        "blurb": "Off by default. Nothing is ever sent without you reading it first.",
+        "title": "Seller messaging",
+        "blurb": "Nothing is sent without your approval.",
     },
     {
         "id": "advanced",
         "title": "Advanced",
-        "blurb": "Rarely needed. If you're not sure, leave these alone.",
+        "blurb": "Rarely needed.",
     },
 )
 
@@ -120,6 +122,7 @@ def _f(
     example: str | None = None,
     warning: str | None = None,
     overridable: str | None = None,
+    section: str | None = None,
 ) -> dict[str, Any]:
     spec: dict[str, Any] = {
         "path": path,
@@ -140,6 +143,8 @@ def _f(
         ("warning", warning),
         # Which global setting this per-item field falls back to when unset.
         ("overridable", overridable),
+        # A sub-heading within a card; purely presentational.
+        ("section", section),
     ):
         if value is not None:
             spec[key] = value
@@ -147,407 +152,337 @@ def _f(
 
 
 _MODEL_OPTIONS = [
-    {"value": c.id, "label": f"{c.label} — {c.note}"} for c in SUPPORTED_MODELS
+    {"value": c.id, "label": f"{c.label} - {c.note}"} for c in SUPPORTED_MODELS
 ]
 
 _MINUTE_OPTIONS = [
-    {"value": 600, "label": "every 10 minutes"},
-    {"value": 900, "label": "every 15 minutes"},
-    {"value": 1800, "label": "every 30 minutes (recommended)"},
-    {"value": 3600, "label": "every hour"},
-    {"value": 7200, "label": "every 2 hours"},
-    {"value": 14400, "label": "every 4 hours"},
+    {"value": 600, "label": "10 minutes"},
+    {"value": 900, "label": "15 minutes"},
+    {"value": 1800, "label": "30 minutes"},
+    {"value": 3600, "label": "1 hour"},
+    {"value": 7200, "label": "2 hours"},
+    {"value": 14400, "label": "4 hours"},
 ]
 
 FIELDS: tuple[dict[str, Any], ...] = (
     # --- items -----------------------------------------------------------------
     _f(
         "items.*.name",
-        "What are you calling this?",
+        "Name",
         group="items",
-        help=(
-            "Just for you — it appears on your alerts and in the lists below. "
-            'Something like "Laptop for school" or "Road bike, 54-56cm".'
-        ),
+        section="Basics",
+        help="Shown on your alerts.",
         placeholder="Road bike",
     ),
     _f(
         "items.*.enabled",
         "Actively hunting",
         group="items",
+        section="Basics",
         widget="toggle",
-        help="Turn this off to pause it without losing the setup.",
+        help="Off pauses it.",
     ),
     _f(
         "items.*.description",
-        "Describe exactly what you want — this is what the AI reads",
+        "What you want (the AI reads this)",
         group="items",
+        section="Basics",
         widget="textarea",
-        rows=10,
+        rows=5,
         example=EXAMPLE_DESCRIPTION,
         help=(
-            "This is the most important box on the page. Write it like instructions to a "
-            "knowledgeable friend shopping for you. The AI reads it against every listing "
-            "it finds and follows it literally, so anything vague it has to guess at. "
-            "Cover four things: what you must have, what would be nice, what's a "
-            "deal-breaker, and what counts as a good price."
+            "The AI judges every listing against this. Cover must-haves, "
+            "nice-to-haves, deal-breakers and a good price."
         ),
     ),
     _f(
         "items.*.search_phrases",
-        "Search terms to type into the marketplace",
+        "Search terms",
         group="items",
+        section="Keywords",
         widget="chips",
-        help=(
-            "Each one runs as its own search, exactly as if you typed it into the "
-            'marketplace\'s search box. Three to six broad terms works well ("gaming pc", '
-            '"rtx 3080"). More terms means a wider net, and a slower, slightly dearer check.'
-        ),
+        help="Each runs as its own search. 3-6 broad terms.",
         placeholder="road bike",
     ),
     _f(
         "items.*.include_keywords",
-        "Related words (helps deal-radar ignore junk results)",
+        "Related words",
         group="items",
+        section="Keywords",
         widget="chips",
         help=(
-            "This is NOT a requirements list. Marketplaces pad search results with "
-            "unrelated things once the real matches run out — BBQs, apartments. A result "
-            "is only considered if its title shares a word with your search terms or this "
-            'list. Keep it broad: brand and model names like "thinkpad", "ryzen", "4070", '
-            "so a listing that names only a model still gets through. If a genuine listing "
-            "ever gets skipped, add a word from its title here."
+            "NOT a requirements list - titles must share a word with these or the "
+            "search terms. Keep it broad."
         ),
     ),
     _f(
         "items.*.exclude_keywords",
-        "Never show me listings containing these words",
+        "Exclude listings with",
         group="items",
+        section="Keywords",
         widget="chips",
-        help=(
-            "This is the only hard filter. If any of these words appears anywhere in a "
-            'listing\'s title or description it is dropped and never rated. Keep it short '
-            'and obvious — "for parts", "broken". A common word here can quietly hide good '
-            "listings."
-        ),
+        help="The only hard filter: any match drops the listing.",
     ),
     _f(
         "items.*.price_min",
         "Lowest price",
         group="items",
+        section="Price and area",
         widget="money",
         prefix="$",
-        help="Leave blank for no lower limit.",
+        help="Blank = no limit.",
     ),
     _f(
         "items.*.price_max",
         "Highest price",
         group="items",
+        section="Price and area",
         widget="money",
         prefix="$",
-        help=(
-            "Leave blank for no upper limit. Listings with no price shown are always "
-            "passed to the AI to judge."
-        ),
+        help="Blank = no limit.",
     ),
     _f(
         "items.*.location",
         "City to search",
         group="items",
-        help=(
-            "Leave blank to use your default city. Type it the way the marketplace "
-            'writes it, e.g. "Mississauga, ON".'
-        ),
+        section="Price and area",
+        help="Blank = your default city.",
     ),
     _f(
         "items.*.radius_km",
-        "How far from that city",
+        "Radius",
         group="items",
+        section="Price and area",
         widget="number",
         unit="km",
-        help="Leave blank to use your default distance.",
+        help="Blank = your default distance.",
     ),
     _f(
         "items.*.marketplaces",
         "Search on",
         group="items",
+        section="Price and area",
         widget="marketplace-checkboxes",
-        help="Only places you've set up appear here.",
+        help="Only places you've set up.",
     ),
     _f(
         "items.*.min_rating",
-        "Only alert me on this one when it scores at least…",
+        "Minimum score",
         group="items",
+        section="Overrides for this hunt",
         widget="rating",
         overridable="ai.min_rating",
-        help=(
-            "Overrides your global setting for this one thing. Set 5 for something "
-            "you'd only buy at a steal."
-        ),
+        help="Overrides the global setting.",
     ),
     _f(
         "items.*.negotiate",
-        "Open with an offer for this one",
+        "Open with an offer",
         group="items",
+        section="Overrides for this hunt",
         widget="toggle",
         overridable="messaging.negotiate",
-        help="Overrides your global messaging setting for this one thing.",
+        help="Overrides the global setting.",
     ),
     _f(
         "items.*.offer_percent",
-        "Open at this much of the asking price, for this one",
+        "Offer % of asking",
         group="items",
+        section="Overrides for this hunt",
         widget="percent",
         overridable="messaging.offer_percent",
-        help="Overrides your global messaging setting for this one thing.",
+        help="Overrides the global setting.",
     ),
     # --- alerts ------------------------------------------------------------------
     _f(
         "ai.min_rating",
-        "Only text me when a find scores at least…",
+        "Minimum score",
         group="alerts",
         widget="rating",
         captions=[
-            "1 — anything, very noisy",
-            "2 — loosely related",
-            "3 — a decent match",
-            "4 — a strong match at a good price (recommended)",
-            "5 — only exceptional finds",
+            "1 - anything, very noisy",
+            "2 - loosely related",
+            "3 - a decent match",
+            "4 - a strong match at a good price (recommended)",
+            "5 - only exceptional finds",
         ],
-        help=(
-            "deal-radar scores every listing out of 5. Pick 5 to hear only about "
-            "exceptional finds; pick 3 to see more, including near-misses."
-        ),
+        help="Every listing is scored out of 5.",
     ),
     _f(
         "notify_top_n",
-        "How many alerts per check",
+        "Alerts per check",
         group="alerts",
         widget="number",
-        help=(
-            "Each time deal-radar checks it finds every match, ranks them best-first, and "
-            "texts you only the top few as one message. 5 is a good default."
-        ),
+        help="Best matches per check, sent as one message.",
     ),
     _f(
         "ai.analyze_images",
-        "Let the AI look at listing photos",
+        "AI looks at photos",
         group="alerts",
         widget="toggle",
-        help=(
-            "Photos are only sent when the seller's text points at them (e.g. "
-            '"everything is in the photos"). It makes judgements more accurate, and it '
-            "makes each check cost noticeably more."
-        ),
+        help="More accurate, costs more.",
     ),
     _f(
         "ai.max_images",
-        "Photos per listing (at most)",
+        "Max photos per listing",
         group="alerts",
         widget="number",
-        help="More photos means a better judgement and a higher cost. 3 is plenty.",
+        help="3 is plenty.",
     ),
     _f(
         "notifiers.*.ntfy.type",
         "Kind of alert",
-        group="alerts",
+        group="notifications",
         widget="notifier-type",
         help="",
     ),
     _f(
         "notifiers.*.ntfy.topic",
-        "Your private ntfy channel name",
-        group="alerts",
+        "ntfy channel name",
+        group="notifications",
         widget="topic",
-        help=(
-            "Like a secret channel name — anyone who knows it can read your alerts, so "
-            "make it long and random. Install the free ntfy app on your phone, tap "
-            "Subscribe, and type this exact name."
-        ),
+        help="Anyone who knows it can read your alerts. Subscribe to it in the ntfy app.",
     ),
     _f(
         "notifiers.*.ntfy.server",
         "ntfy server",
-        group="alerts",
+        group="notifications",
         advanced=True,
-        help="Leave this as https://ntfy.sh unless you run your own ntfy server.",
+        help="Leave as https://ntfy.sh unless you self-host.",
     ),
     _f(
         "notifiers.*.ntfy.priority",
         "Alert priority",
-        group="alerts",
+        group="notifications",
         widget="number",
         advanced=True,
-        help=(
-            "Blank means whatever the app decides. 5 gets through Do Not Disturb on "
-            "most phones."
-        ),
+        help="Blank = app default. 5 gets through Do Not Disturb.",
     ),
     _f(
         "notifiers.*.telegram.type",
         "Kind of alert",
-        group="alerts",
+        group="notifications",
         widget="notifier-type",
         help="",
     ),
     _f(
         "notifiers.*.telegram.bot_token",
         "Bot token",
-        group="alerts",
+        group="notifications",
         widget="secret",
-        warning="Telegram alerts aren't built yet — a scan will stop with an error.",
-        help=(
-            "From @BotFather in Telegram. You can type ${TELEGRAM_BOT_TOKEN} here instead "
-            "to keep the secret out of this file."
-        ),
+        warning="Telegram alerts aren't built yet - a scan will stop with an error.",
+        help="From @BotFather. ${TELEGRAM_BOT_TOKEN} also works.",
     ),
     _f(
         "notifiers.*.telegram.chat_id",
         "Chat ID",
-        group="alerts",
+        group="notifications",
         widget="secret",
-        help="The Telegram chat to send to. ${TELEGRAM_CHAT_ID} also works.",
+        help="${TELEGRAM_CHAT_ID} also works.",
     ),
     # --- where -------------------------------------------------------------------
     _f(
         "marketplaces.*.enabled",
-        "Search this marketplace",
+        "Enabled",
         group="where",
         widget="toggle",
-        help="Turn off to pause it without deleting your setup.",
+        help="Off pauses it.",
     ),
     _f(
         "marketplaces.*.default_location",
         "Your city",
         group="where",
-        help=(
-            "Used by anything that doesn't set its own. Type it the way the marketplace "
-            'writes it, e.g. "Toronto, ON".'
-        ),
+        help="As the marketplace writes it, e.g. \"Toronto, ON\".",
     ),
     _f(
         "marketplaces.*.default_radius_km",
-        "How far to look",
+        "Radius",
         group="where",
         widget="number",
         unit="km",
-        help="40 km covers a metro area; 100 km reaches the surrounding towns.",
+        help="40 km covers a metro area.",
     ),
     _f(
         "marketplaces.*.fetch_details",
-        "Open each listing's full page before judging it",
+        "Read full listing pages",
         group="where",
         widget="toggle",
         advanced=True,
-        help=(
-            "On (recommended): deal-radar reads the seller's full description, which makes "
-            "scores much more accurate. Off: it judges from the short blurb on the results "
-            "page — faster and cheaper, and much less accurate."
-        ),
+        help="Reads the full description. Much more accurate; off is faster and cheaper.",
     ),
     _f(
         "marketplaces.*.session_path",
-        "Where the saved sign-in is kept",
+        "Saved sign-in location",
         group="where",
         advanced=True,
-        help=(
-            "Leave blank for the standard location. Only change this if you keep several "
-            "separate logins."
-        ),
+        help="Blank = standard location.",
     ),
     # --- when --------------------------------------------------------------------
     _f(
         "schedule.poll_interval_seconds",
-        "Check for new listings",
+        "Check every",
         group="when",
         widget="select",
         options=_MINUTE_OPTIONS,
-        help=(
-            "Every 30 minutes is a good balance. Checking more often won't find much more "
-            "— people don't post that fast — and puts more load on the marketplace. The "
-            "minimum allowed is 5 minutes."
-        ),
+        help="30 minutes recommended.",
     ),
     _f(
         "scan.max_evaluations_per_item",
-        "How many listings to check each time",
+        "Listings to rate per scan",
         group="when",
         widget="number",
-        help=(
-            "Each check is one paid AI request, so this is your cost cap. The first scan "
-            "costs the most; after that, listings already checked are skipped. Set 0 to "
-            "look without asking the AI anything, for free."
-        ),
+        help="Each is one paid AI request. 0 = free, no AI.",
     ),
     _f(
         "scan.max_listings_per_search",
-        "How far to scroll the search results",
+        "Results to read per search",
         group="when",
         widget="number",
         advanced=True,
-        help=(
-            "How many results to read before stopping. Higher digs further back through "
-            "older listings, and takes longer."
-        ),
+        help="Higher digs further back, slower.",
     ),
     _f(
         "schedule.jitter_seconds",
-        "Random wobble added to the wait",
+        "Random extra wait",
         group="when",
         widget="number",
         unit="seconds",
         advanced=True,
-        help=(
-            "Adds up to this much extra random delay between checks so the timing doesn't "
-            "look robotic. 600 is fine."
-        ),
+        help="Random extra delay between checks.",
     ),
     _f(
         "schedule.per_request_min_interval_seconds",
-        "Minimum pause between page loads",
+        "Pause between page loads",
         group="when",
         widget="number",
         unit="seconds",
         advanced=True,
-        help=(
-            "Slows deal-radar to a human browsing pace. Lowering it makes scans faster and "
-            "raises the risk of being blocked."
-        ),
+        help="Lower is faster but riskier.",
     ),
     # --- messaging ----------------------------------------------------------------
     _f(
         "messaging.enabled",
-        "Let deal-radar write first messages to sellers",
+        "Draft messages to sellers",
         group="messaging",
         widget="toggle",
         warning=(
             "Automated messaging may go against a marketplace's terms of service. Use it "
             "sparingly, and read every draft before you approve it."
         ),
-        help=(
-            "When something matches, deal-radar writes a message for you and puts it in "
-            "Message drafts. Nothing is ever sent until you read it and press Approve."
-        ),
+        help="Drafts go to Message drafts. Nothing is sent until you approve it.",
     ),
     _f(
         "messaging.negotiate",
-        "Open with an offer instead of the asking price",
+        "Open with an offer",
         group="messaging",
         widget="toggle",
-        help=(
-            "Off: the draft just asks whether the item is still available. On: it politely "
-            "names a price."
-        ),
+        help="Off just asks if it's available.",
     ),
     _f(
         "messaging.offer_percent",
-        "Open at this much of the asking price",
+        "Offer % of asking",
         group="messaging",
         widget="percent",
-        help=(
-            "90% of a $500 listing opens at $450. Rounded to the nearest $5, and never "
-            "above the asking price."
-        ),
+        help="Rounded to $5, never above asking.",
     ),
     # --- advanced -----------------------------------------------------------------
     _f(
@@ -556,7 +491,7 @@ FIELDS: tuple[dict[str, Any], ...] = (
         group="advanced",
         widget="number",
         advanced=True,
-        help="Leave this at 1. It tells deal-radar how to read this file.",
+        help="Leave at 1.",
     ),
     _f(
         "ai.provider",
@@ -565,20 +500,16 @@ FIELDS: tuple[dict[str, Any], ...] = (
         widget="select",
         options=[{"value": "anthropic", "label": "Anthropic (Claude)"}],
         advanced=True,
-        help="Claude is the only service supported right now.",
+        help="Only Claude for now.",
     ),
     _f(
         "ai.model",
-        "Which Claude model rates your listings",
+        "Claude model",
         group="advanced",
         widget="combo",
         options=_MODEL_OPTIONS,
         advanced=True,
-        help=(
-            "Haiku is the cheapest and fastest, and is what we recommend. Sonnet is "
-            "smarter and costs about three times as much per listing. Opus is the most "
-            "capable and about five times as much. If you're not sure, leave it alone."
-        ),
+        help="Haiku is cheapest (recommended). Sonnet ~3x, Opus ~5x per listing.",
     ),
     _f(
         "ai.max_tokens",
@@ -587,18 +518,14 @@ FIELDS: tuple[dict[str, Any], ...] = (
         widget="number",
         unit="tokens",
         advanced=True,
-        help="How much room the AI gets for its answer. 1024 is plenty.",
+        help="1024 is plenty.",
     ),
     _f(
         "ai.api_key_env",
-        "Name of the environment variable holding your Claude API key",
+        "API key variable name",
         group="advanced",
         advanced=True,
-        help=(
-            "Your key is never stored in this file — deal-radar reads it from your "
-            "computer's environment under this name. Leave it as ANTHROPIC_API_KEY unless "
-            "you know you named it something else."
-        ),
+        help="Your key is read from this environment variable, never stored here.",
     ),
 )
 

@@ -192,99 +192,309 @@ body.setup-required header [data-scanner] { display: none; }
 }
 #spend { font-variant-numeric: tabular-nums; }
 
-/* --- settings form ---------------------------------------------------------- */
+/* --- settings page -----------------------------------------------------------
+   A page of its own inside the dashboard grid: no panel chrome around it, a
+   centred column, and each group laid out as "title on the left, card(s) on
+   the right" - collapsing to one column on narrow screens. Everything here is
+   scoped to #configsec so the rest of the dashboard keeps its own look. */
 
-.panel { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 12px; }
-.panel > summary {
-  padding: 12px 14px; cursor: pointer; background: var(--well);
-  border-radius: 8px; display: flex; gap: 10px; flex-wrap: wrap; align-items: baseline;
+#configsec {
+  background: none; border: 0; padding: 0;
+  --s-radius: 10px;
+  --s-control-h: 38px;
+  --s-ring: 0 0 0 3px color-mix(in srgb, var(--link) 28%, transparent);
+  --s-card: var(--panel);
+  --s-subtle: color-mix(in srgb, var(--text) 4%, transparent);
 }
-.panel[open] > summary { border-radius: 8px 8px 0 0; border-bottom: 1px solid var(--border); }
-.panel > div { padding: 14px; }
+.settings { max-width: 1080px; margin: 0 auto; }
 
-.field { margin-bottom: 16px; max-width: 62ch; }
-.field > label { display: block; font-weight: 600; margin-bottom: 4px; }
-/* Checkbox and its label sit on one line; the help and any warning go
-   underneath, full width. A plain flex row put all four side by side. */
-.field-inline {
-  display: grid; grid-template-columns: auto 1fr; column-gap: 8px; align-items: center;
+/* Header: title + description left, actions right, kept on screen while the
+   long form scrolls underneath so Save is always one click away. */
+.settings-header {
+  position: sticky; top: 0; z-index: 5;
+  display: flex; align-items: flex-end; justify-content: space-between;
+  gap: 16px 24px; flex-wrap: wrap;
+  padding: 20px 0 18px; margin-bottom: 8px;
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--rule);
 }
-.field-inline > input[type='checkbox'] { grid-column: 1; grid-row: 1; }
-.field-inline > label { grid-column: 2; grid-row: 1; margin: 0; }
-.field-inline > .field-help,
-.field-inline > .field-warning { grid-column: 1 / -1; }
-.field-help { margin-top: 5px; font-size: 13px; color: var(--text-dim); }
-.field-warning {
-  margin-top: 5px; font-size: 13px; color: var(--amber); font-weight: 600;
+#configsec .settings-header h2 {
+  font-size: 22px; font-weight: 600; letter-spacing: -0.01em;
+  text-transform: none; color: var(--text); margin: 0; display: block;
 }
-.field-error { margin-top: 5px; font-size: 13px; color: var(--red); font-weight: 600; }
+.settings-lede { margin: 4px 0 0; font-size: 14px; color: var(--text-dim); }
+.settings-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+#formstatus { font-size: 13px; margin-right: 4px; text-align: right; max-width: 42ch; }
+#formstatus:empty { display: none; }
 
-.field input[type='text'],
-.field input[type='number'],
-.field select,
-.field textarea {
-  width: 100%; padding: 8px 10px; border-radius: 6px; font: inherit;
-  border: 1px solid var(--border); background: var(--well); color: var(--text);
+/* Groups ------------------------------------------------------------------- */
+#configform { display: flex; flex-direction: column; }
+#configsec .group {
+  display: grid; grid-template-columns: 1fr; gap: 14px;
+  padding: 28px 0; margin: 0; background: none; border: 0; border-radius: 0;
+  border-top: 1px solid var(--rule);
 }
-.field textarea { min-height: 90px; resize: vertical; font: inherit; }
-.field input[type='number'] { max-width: 12ch; }
-.field .invalid,
-.field input.invalid,
-.field textarea.invalid { border-color: var(--red); }
-.field input[type='checkbox'] { width: 18px; height: 18px; }
+#configsec .group:first-child { border-top: 0; padding-top: 20px; }
+@media (min-width: 960px) {
+  #configsec .group { grid-template-columns: 260px minmax(0, 1fr); gap: 40px; }
+  #configsec .group-head { position: sticky; top: 104px; align-self: start; }
+}
+#configsec .group-title {
+  font-size: 15px; font-weight: 600; margin: 0; padding: 0; border: 0; color: var(--text);
+}
+.group-blurb { margin: 4px 0 0; font-size: 13px; line-height: 1.5; color: var(--text-dim); }
+.group-body { min-width: 0; }
+#configsec .stack { display: flex; flex-direction: column; gap: 16px; }
 
-.example { margin-top: 8px; }
-.example summary { cursor: pointer; color: var(--link); width: fit-content; }
-.example pre {
-  margin: 8px 0; padding: 10px; background: var(--well); border: 1px solid var(--border);
-  border-radius: 6px; white-space: pre-wrap; font: 12px/1.5 ui-monospace, monospace;
+/* Cards -------------------------------------------------------------------- */
+#configsec .card {
+  background: var(--s-card); border: 1px solid var(--border);
+  border-radius: var(--s-radius); padding: 22px; margin: 0;
+}
+#configsec .card-head {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin: -22px -22px 20px; padding: 14px 22px;
+  border-bottom: 1px solid var(--rule); font-size: 14px;
+}
+#configsec .card-head b { font-weight: 600; }
+#configsec .card-foot {
+  display: flex; justify-content: flex-end; gap: 8px;
+  margin: 22px -22px -22px; padding: 12px 22px;
+  border-top: 1px solid var(--rule);
+}
+#configsec .tag {
+  font-size: 11px; font-weight: 500; padding: 2px 8px; border-radius: 999px;
+  background: var(--s-subtle); border: 1px solid var(--border); color: var(--text-dim);
 }
 
-.chips {
-  display: flex; flex-wrap: wrap; gap: 6px; padding: 6px; border-radius: 6px;
-  border: 1px solid var(--border); background: var(--well);
+/* Sub-sections inside a hunt card. */
+.subsection + .subsection { margin-top: 24px; padding-top: 22px; border-top: 1px solid var(--rule); }
+.subsection-title {
+  margin: 0 0 14px; font-size: 12px; font-weight: 600; color: var(--text-dim);
+  text-transform: uppercase; letter-spacing: .06em;
 }
-.chips.invalid { border-color: var(--red); }
-.chip-list { display: contents; }
-.chip {
-  display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 8px;
-  border-radius: 12px; background: var(--btn); font-size: 13px;
+
+/* Field grid: two even columns; wide fields take the whole row. */
+#configsec .field-grid {
+  display: grid; gap: 20px 20px; align-items: start;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
-.chip button {
-  border: 0; background: none; color: var(--text-dim); padding: 0 4px;
-  min-height: 0; cursor: pointer; font-size: 15px; line-height: 1;
+@media (max-width: 640px) {
+  #configsec .field-grid { grid-template-columns: minmax(0, 1fr); }
+  #configsec .card { padding: 18px; }
+  #configsec .card-head { margin: -18px -18px 18px; padding: 12px 18px; }
+  #configsec .card-foot { margin: 18px -18px -18px; padding: 10px 18px; }
+  /* Compact pinned header: title and buttons share a row. */
+  .settings-header { align-items: center; padding: 12px 0; flex-wrap: nowrap; }
+  #configsec .settings-header h2 { font-size: 19px; }
+  .settings-lede { font-size: 12.5px; }
+  .settings-actions { flex-wrap: wrap; justify-content: flex-end; flex: none; max-width: 170px; }
+  #formstatus { flex-basis: 100%; order: 3; font-size: 12px; margin: 0; }
 }
-.chips > input {
-  flex: 1 1 12ch; min-width: 12ch; border: 0; background: none; color: var(--text);
-  font: inherit; padding: 4px;
+#configsec .field-wide { grid-column: 1 / -1; }
+
+/* Fields ------------------------------------------------------------------- */
+#configsec .field { min-width: 0; }
+#configsec .field > .field-label {
+  display: block; font-weight: 500; font-size: 13px; color: var(--text); margin-bottom: 6px;
 }
-.chips > input:focus { outline: none; }
-
-.rating { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-.rating button { min-width: 40px; }
-.rating button.on { background: var(--green-bg); border-color: var(--green-border); color: #fff; }
-.rating-caption { flex-basis: 100%; font-size: 13px; }
-
-.checkboxes { display: flex; gap: 14px; flex-wrap: wrap; }
-.checkbox { display: inline-flex; align-items: center; gap: 6px; font-weight: 400; }
-.topic { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-.topic > input { flex: 1 1 22ch; }
-.override { padding-left: 12px; border-left: 2px solid var(--border); }
-
-.card {
-  border: 1px solid var(--border); border-radius: 8px; padding: 12px;
-  margin-bottom: 12px; background: var(--panel);
+#configsec .field-help { margin-top: 6px; font-size: 12.5px; line-height: 1.45; color: var(--text-dim); }
+#configsec .field-warning {
+  margin-top: 10px; padding: 9px 12px; border-radius: 8px;
+  font-size: 12.5px; line-height: 1.45; font-weight: 500; color: var(--amber);
+  background: color-mix(in srgb, var(--amber) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--amber) 28%, transparent);
 }
-.card > summary { cursor: pointer; margin: -12px -12px 12px; padding: 12px; }
-.card-head { margin-bottom: 10px; }
+#configsec .field-error { margin-top: 6px; font-size: 12.5px; color: var(--red); font-weight: 500; }
 
-.empty { padding: 18px; text-align: left; }
-.empty h3 { margin: 0 0 8px; }
-.empty button { margin-right: 8px; margin-top: 8px; }
+/* Toggle rows: label and help on the left, switch on the right. */
+#configsec .field-inline {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 20px; align-items: center;
+}
+#configsec .field-inline > label { grid-column: 1; grid-row: 1; margin: 0; }
+#configsec .field-inline > input[type='checkbox'] { grid-column: 2; grid-row: 1 / span 2; }
+#configsec .field-inline > .field-help { grid-column: 1; grid-row: 2; margin-top: 2px; }
+#configsec .field-inline > .field-warning,
+#configsec .field-inline > .field-error,
+#configsec .field-inline > .example { grid-column: 1 / -1; }
 
-.problems {
-  margin-bottom: 12px; padding: 10px 14px; border-radius: 6px;
-  border: 1px solid var(--red-border); background: var(--well);
+/* Text-like controls */
+#configsec .field input[type='text'],
+#configsec .field input[type='number'],
+#configsec .field input:not([type]),
+#configsec .field select,
+#configsec .field textarea,
+#configsec .affix {
+  width: 100%; min-height: var(--s-control-h); padding: 8px 12px;
+  border-radius: 8px; border: 1px solid var(--border);
+  background: var(--well); color: var(--text); font: inherit; font-size: 14px;
+  transition: border-color .12s, box-shadow .12s;
+}
+#configsec .field input:hover,
+#configsec .field select:hover,
+#configsec .field textarea:hover,
+#configsec .affix:hover,
+#configsec .chips:hover { border-color: var(--btn-border); }
+#configsec .field input:focus,
+#configsec .field select:focus,
+#configsec .field textarea:focus { outline: none; border-color: var(--link); box-shadow: var(--s-ring); }
+#configsec .field textarea { height: auto; min-height: 120px; line-height: 1.55; resize: vertical; }
+#configsec .field select {
+  appearance: none; padding-right: 34px; cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-dim) 50%),
+    linear-gradient(135deg, var(--text-dim) 50%, transparent 50%);
+  background-position: calc(100% - 17px) 50%, calc(100% - 12px) 50%;
+  background-size: 5px 5px; background-repeat: no-repeat;
+}
+#configsec .field input::placeholder,
+#configsec .field textarea::placeholder { color: color-mix(in srgb, var(--text-dim) 75%, transparent); }
+#configsec .field .invalid,
+#configsec .affix:has(.invalid) { border-color: var(--red); }
+#configsec .field .invalid:focus { box-shadow: 0 0 0 3px color-mix(in srgb, var(--red) 25%, transparent); }
+
+/* `$ [   ]` and `[   ] km` */
+#configsec .affix { display: flex; align-items: center; gap: 8px; padding: 0 12px; cursor: text; }
+#configsec .affix:focus-within { border-color: var(--link); box-shadow: var(--s-ring); }
+#configsec .affix > input {
+  flex: 1; min-width: 0; border: 0 !important; background: none !important;
+  box-shadow: none !important; padding: 0 !important; min-height: calc(var(--s-control-h) - 2px);
+}
+.affix-text { color: var(--text-dim); font-size: 13px; white-space: nowrap; user-select: none; }
+
+/* Switch (toggle widget) */
+#configsec .field-inline > input[type='checkbox'] {
+  appearance: none; margin: 0; width: 38px; height: 22px; border-radius: 999px;
+  background: var(--btn-border); position: relative; cursor: pointer; flex: none;
+  transition: background .15s;
+}
+#configsec .field-inline > input[type='checkbox']::before {
+  content: ''; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px;
+  border-radius: 50%; background: #fff; transition: transform .15s;
+  box-shadow: 0 1px 2px rgb(0 0 0 / .3);
+}
+#configsec .field-inline > input[type='checkbox']:checked { background: var(--green-bg); }
+#configsec .field-inline > input[type='checkbox']:checked::before { transform: translateX(16px); }
+#configsec .field-inline > input[type='checkbox']:focus-visible { outline: none; box-shadow: var(--s-ring); }
+
+/* Plain checkboxes (marketplaces, "use my default") */
+#configsec input[type='checkbox'] { accent-color: var(--green-bg); width: 16px; height: 16px; margin: 0; cursor: pointer; }
+#configsec .checkboxes { display: flex; gap: 10px; flex-wrap: wrap; }
+#configsec .checkboxes .checkbox {
+  padding: 8px 14px 8px 12px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--well); cursor: pointer; font-size: 14px; text-transform: capitalize;
+}
+#configsec .checkboxes .checkbox:has(input:checked) {
+  border-color: color-mix(in srgb, var(--green-border) 70%, var(--border));
+  background: color-mix(in srgb, var(--green-bg) 14%, var(--well));
+}
+#configsec .checkbox { display: inline-flex; align-items: center; gap: 8px; font-weight: 400; cursor: pointer; }
+
+/* Tag inputs */
+#configsec .chips {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  min-height: var(--s-control-h); padding: 5px 6px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--well); cursor: text;
+  transition: border-color .12s, box-shadow .12s;
+}
+#configsec .chips:focus-within { border-color: var(--link); box-shadow: var(--s-ring); }
+#configsec .chips.invalid { border-color: var(--red); }
+#configsec .chip-list { display: contents; }
+#configsec .chip {
+  display: inline-flex; align-items: center; gap: 2px; height: 26px;
+  padding: 0 2px 0 9px; border-radius: 6px; font-size: 13px;
+  background: var(--btn); border: 1px solid var(--btn-border); color: var(--text);
+}
+#configsec .chip button {
+  width: 20px; height: 20px; min-height: 0; padding: 0; border: 0; border-radius: 4px;
+  background: none; color: var(--text-dim); font-size: 15px; line-height: 1;
+  display: inline-grid; place-items: center;
+}
+#configsec .chip button:hover { background: var(--btn-hover); color: var(--text); }
+#configsec .chips > input {
+  flex: 1 1 14ch; min-width: 14ch; height: 26px; border: 0 !important;
+  background: none !important; box-shadow: none !important; padding: 0 6px !important;
+  min-height: 0 !important; color: var(--text); font: inherit; font-size: 14px;
+}
+#configsec .chips > input:focus { outline: none; }
+
+/* Score: a segmented control */
+#configsec .rating { display: flex; flex-wrap: wrap; align-items: center; gap: 0; }
+#configsec .rating button {
+  min-width: 48px; min-height: var(--s-control-h); padding: 0 12px; margin: 0;
+  border-radius: 0; border: 1px solid var(--border); border-left-width: 0;
+  background: var(--well); color: var(--text-dim); font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+#configsec .rating button:first-of-type { border-left-width: 1px; border-radius: 8px 0 0 8px; }
+#configsec .rating button:nth-of-type(5) { border-radius: 0 8px 8px 0; }
+#configsec .rating button:hover { background: var(--btn); color: var(--text); }
+#configsec .rating button.on {
+  background: var(--green-bg); border-color: var(--green-border); color: #fff;
+  position: relative; z-index: 1; box-shadow: -1px 0 0 var(--green-border);
+}
+#configsec .rating-caption { flex-basis: 100%; margin-top: 8px; font-size: 12.5px; }
+
+/* ntfy channel: input, then its actions */
+#configsec .topic { display: flex; flex-direction: column; gap: 10px; }
+.topic-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.topic-actions .muted, .topic-actions .ok, .topic-actions .err { font-size: 13px; }
+
+/* Per-hunt override: a quiet inset */
+#configsec .override {
+  padding: 14px 16px; border-radius: 8px; border: 1px solid var(--rule);
+  background: var(--s-subtle);
+}
+#configsec .override > .checkbox { font-size: 13px; color: var(--text-dim); }
+#configsec .override > div:not([hidden]) { margin-top: 14px; }
+
+/* "Show an example" */
+#configsec .example { margin-top: 8px; font-size: 13px; }
+#configsec .example summary { cursor: pointer; color: var(--link); width: fit-content; }
+#configsec .example summary:hover { text-decoration: underline; }
+#configsec .example pre {
+  margin: 10px 0; padding: 12px 14px; background: var(--well); border: 1px solid var(--border);
+  border-radius: 8px; white-space: pre-wrap; font: 12px/1.6 ui-monospace, monospace;
+}
+
+/* Advanced: a collapsible card */
+#configsec .panel { padding: 0; }
+#configsec .panel > summary {
+  list-style: none; cursor: pointer; padding: 14px 22px; font-size: 14px; font-weight: 500;
+  display: flex; align-items: center; gap: 10px; border-radius: var(--s-radius);
+  background: none; border: 0;
+}
+#configsec .panel > summary::-webkit-details-marker { display: none; }
+#configsec .panel > summary::before {
+  content: ''; width: 6px; height: 6px; flex: none;
+  border-right: 1.5px solid var(--text-dim); border-bottom: 1.5px solid var(--text-dim);
+  transform: rotate(-45deg); transition: transform .15s;
+}
+#configsec .panel[open] > summary::before { transform: rotate(45deg); }
+#configsec .panel > summary:hover { background: var(--s-subtle); }
+#configsec .panel[open] > summary { border-bottom: 1px solid var(--rule); border-radius: var(--s-radius) var(--s-radius) 0 0; }
+#configsec .panel-body { padding: 22px; }
+
+#configsec .raw { margin-top: 24px; padding-top: 22px; border-top: 1px solid var(--rule); }
+#configsec .raw > p { margin: 0 0 10px; font-size: 13px; }
+#configsec .raw textarea { height: 300px; border-radius: 8px; padding: 12px 14px; }
+#configsec .raw textarea:focus { outline: none; border-color: var(--link); box-shadow: var(--s-ring); }
+.raw-actions { display: flex; align-items: center; gap: 12px; margin-top: 12px; flex-wrap: wrap; }
+
+/* Empty / first-run states */
+#configsec .empty {
+  padding: 32px; border: 1px dashed var(--border); border-radius: var(--s-radius);
+  background: var(--s-card);
+}
+#configsec .empty h3 { margin: 0 0 6px; font-size: 16px; font-weight: 600; }
+#configsec .empty p { margin: 0 0 6px; }
+#configsec .empty button { margin: 12px 8px 0 0; }
+
+/* Problems summary */
+#configsec .problems {
+  margin: 16px 0 0; padding: 12px 16px; border-radius: var(--s-radius);
+  border: 1px solid color-mix(in srgb, var(--red) 35%, transparent);
+  background: color-mix(in srgb, var(--red) 6%, var(--panel));
 }
 .summary-line { margin: 4px 0; font-size: 13px; }
 .summary-line.err { color: var(--red); }
@@ -294,9 +504,20 @@ body.setup-required header [data-scanner] { display: none; }
   border: 0; background: none; color: inherit; padding: 0; min-height: 0;
   text-align: left; text-decoration: underline; cursor: pointer; font: inherit;
 }
+#configsec .linky:hover { background: none; }
 
-.raw { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 14px; }
-.raw textarea { height: 300px; }
+/* Buttons on the settings page */
+#configsec button { border-radius: 8px; font-size: 13px; font-weight: 500; min-height: 36px; padding: 0 14px; }
+#configsec button.primary:hover:not(:disabled) { background: color-mix(in srgb, var(--green-bg) 85%, #fff); }
+#configsec .danger-quiet {
+  background: none; border-color: transparent; color: var(--red);
+}
+#configsec .danger-quiet:hover { background: color-mix(in srgb, var(--red) 10%, transparent); border-color: color-mix(in srgb, var(--red) 30%, transparent); }
+#configsec .add-row {
+  width: 100%; min-height: 44px; border-style: dashed; background: none; color: var(--text-dim);
+}
+#configsec .add-row:hover { color: var(--text); background: var(--s-subtle); border-color: var(--text-dim); }
+#configsec button.tiny { min-height: 28px; padding: 0 10px; font-size: 12px; }
 
 .spacer { flex: 1; }
 .actions { margin-top: 8px; }
@@ -312,7 +533,9 @@ button {
   border-radius: 6px; padding: 8px 12px; cursor: pointer; font: inherit;
   min-height: 36px;
 }
-button:hover { background: var(--btn-hover); }
+button:where(:hover:not(:disabled)) { background: var(--btn-hover); }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
 button.primary { background: var(--green-bg); border-color: var(--green-border); color: #fff; }
 button.danger { background: var(--red-bg); border-color: var(--red-border); color: #fff; }
 button.tiny { font-size: 11px; padding: 2px 8px; min-height: 0; }

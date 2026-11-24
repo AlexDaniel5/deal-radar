@@ -236,7 +236,7 @@ def test_login_refused_without_a_display(
 def test_login_refused_while_a_scan_is_running(
     env: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Scans, sends and logins all drive Playwright — only one at a time."""
+    """Scans, sends and logins all drive Playwright - only one at a time."""
     monkeypatch.setenv("DISPLAY", ":0")
     ctl = ScannerController(lambda s: s.wait(), lambda s: None)
     app = create_app(

@@ -19,7 +19,7 @@ class ConfigError(DealRadarError):
         ``"schema"`` (pydantic rejected it), ``"yaml"`` (it didn't parse),
         ``"env"`` (an unset ``${VAR}``), or ``"other"``.
     ``errors``
-        For ``kind="schema"``, ``ValidationError.errors()`` — each entry has a
+        For ``kind="schema"``, ``ValidationError.errors()`` - each entry has a
         ``loc`` tuple the form maps back to a control.
     ``line`` / ``column``
         For ``kind="yaml"``, 1-based position of the syntax error.

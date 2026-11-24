@@ -1,8 +1,8 @@
 """One-at-a-time background worker threads for the web server.
 
 Playwright's sync API must not run inside uvicorn's asyncio loop, so every
-browser-driving operation the web UI offers — scanning, sending a seller
-message, capturing a Facebook login, checking a saved session — runs in a
+browser-driving operation the web UI offers - scanning, sending a seller
+message, capturing a Facebook login, checking a saved session - runs in a
 dedicated daemon thread instead.
 
 All of those share the same skeleton: a lock, at most one live thread, a stop

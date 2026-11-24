@@ -101,7 +101,7 @@ def _marketplace_factory(
 
 
 def _scan_limits(cfg: AppConfig, args: argparse.Namespace) -> tuple[int, int]:
-    """(max_listings, max_evaluations) — CLI flags override the config's ``scan:`` block."""
+    """(max_listings, max_evaluations) - CLI flags override the config's ``scan:`` block."""
     limit = args.limit if args.limit is not None else cfg.scan.max_listings_per_search
     max_evals = (
         args.max_evals if args.max_evals is not None else cfg.scan.max_evaluations_per_item
@@ -243,20 +243,20 @@ def _cmd_serve(args: argparse.Namespace) -> int:
 
     # Deliberately do NOT fail fast on a missing or broken config: fixing it is
     # the web UI's job now. Refusing to start would leave a first-time user with
-    # no way in — the setup screen and the settings form both exist precisely
+    # no way in - the setup screen and the settings form both exist precisely
     # for the case where there is nothing valid on disk yet.
     try:
         load_config(args.config)
     except DealRadarError as exc:
         print(f"note: {exc}")
-        print("      Starting anyway — set things up in the browser.")
+        print("      Starting anyway - set things up in the browser.")
 
     app = create_app(config_path=args.config)
     print(f"deal-radar web UI at http://{args.host}:{args.port}  (config: {args.config})")
     if args.host not in ("127.0.0.1", "localhost", "::1"):
         print(
             f"  WARNING: listening on {args.host}, not just this computer. There is no "
-            "password — anyone who can reach this address can read your settings, "
+            "password - anyone who can reach this address can read your settings, "
             "start scans that cost money, and message sellers as you."
         )
     uvicorn.run(
@@ -265,7 +265,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         port=args.port,
         log_level="warning",
         # The live-log stream holds a connection open for as long as the page
-        # is in a browser, and a graceful shutdown waits for open connections —
+        # is in a browser, and a graceful shutdown waits for open connections -
         # so without a bound, Ctrl-C simply never returns while the UI is open.
         timeout_graceful_shutdown=3,
     )
@@ -301,7 +301,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     """Print the same readiness checks the web wizard shows.
 
     This is what a technical helper reaches for when someone says "it isn't
-    working" — same source of truth as the browser, no browser required.
+    working" - same source of truth as the browser, no browser required.
     """
     from .web import preflight
     from .web.setup import read_state

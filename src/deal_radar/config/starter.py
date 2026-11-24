@@ -21,7 +21,7 @@ def random_topic() -> str:
 
 
 # Shown in the form as "what a good description looks like". Concrete about
-# must-haves, deal-breakers, and what makes the price good — the three things
+# must-haves, deal-breakers, and what makes the price good - the three things
 # people leave out.
 EXAMPLE_DESCRIPTION = """\
 A road bike for commuting, frame size 54-56cm.
@@ -32,7 +32,7 @@ Don't want: anything sold "for parts", frames with cracks or dents, bikes
 missing wheels, or e-bikes.
 
 A good price is meaningfully below what the same model usually sells for
-locally — around $300 for a decent used aluminium frame, less if it needs
+locally - around $300 for a decent used aluminium frame, less if it needs
 tyres or a service."""
 
 
@@ -49,7 +49,7 @@ def starter_config_text(
     """Build a small, commented config from the wizard's answers."""
     lines = [
         "# Created by the deal-radar setup screen.",
-        "# You can keep editing it here, or open it in a text editor — both work.",
+        "# You can keep editing it here, or open it in a text editor - both work.",
         "version: 1",
         "",
         "ai:",
@@ -70,7 +70,7 @@ def starter_config_text(
         "",
         "notifiers:",
         "  - type: ntfy",
-        f"    topic: {topic}   # your private channel — keep this secret",
+        f"    topic: {topic}   # your private channel - keep this secret",
         "",
         "items:",
         f'  - name: "{item_name}"',

@@ -4,7 +4,7 @@ deal-radar keeps its "already checked" listings and message drafts in a single
 SQLite file under ``~/.local/share/deal-radar`` (or ``$DEAL_RADAR_DATA_DIR``).
 Endpoint tests resolve that path at call time, so a test that forgets to
 override the location will happily wipe real data through a route like
-``/api/seen/clear`` — which is exactly what happened once.
+``/api/seen/clear`` - which is exactly what happened once.
 
 Individual tests may still point ``DEAL_RADAR_DATA_DIR`` somewhere they control;
 this only makes *forgetting* to harmless.

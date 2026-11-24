@@ -121,6 +121,8 @@ def test_static_assets_served(tmp_path: Path) -> None:
         r = client.get(f"/static/{name}")
         assert r.status_code == 200, name
         assert fragment in r.text, name
+        # Without it browsers cache heuristically and keep running stale JS.
+        assert r.headers["cache-control"] == "no-cache", name
 
 
 def test_index_sets_no_cache_and_csp(tmp_path: Path) -> None:
@@ -598,3 +600,19 @@ def test_dismiss_sets_status(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     assert row is not None and row["status"] == "dismissed"
     # A dismissed draft can't be dismissed (or approved) again.
     assert client.post(f"/api/drafts/{draft['id']}/dismiss", json={}).status_code == 409
+
+
+def test_index_points_at_versioned_assets_that_resolve(tmp_path: Path) -> None:
+    """A code change must change the asset URLs, or browsers keep stale JS."""
+    import re as _re
+
+    client, _, _, _ = _client(tmp_path)
+    html = client.get("/").text
+    script = _re.search(r'src="(/static/v[0-9a-f]{12}/main\.js)"', html)
+    assert script, html
+    r = client.get(script.group(1))
+    assert r.status_code == 200 and "refreshStatus" in r.text
+    assert r.headers["cache-control"] == "no-cache"
+    # Modules import each other relatively, so they share the versioned prefix.
+    common = script.group(1).replace("main.js", "common.js")
+    assert client.get(common).status_code == 200

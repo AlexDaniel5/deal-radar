@@ -43,7 +43,7 @@
       </button>
       <span class="muted">
         Checks that the browser opens, your Facebook sign-in still works and a search
-        returns results. It stops before asking the AI anything, so it costs nothing —
+        returns results. It stops before asking the AI anything, so it costs nothing -
         and it won't find you deals; use “Scan now” for that.
       </span>
     </div>
@@ -75,27 +75,37 @@
     </h2>
     <p class="section-note muted">
       Listings deal-radar has already looked at. It skips these next time, so
-      forgetting one means it can turn up — and be paid for — again.
+      forgetting one means it can turn up - and be paid for - again.
     </p>
     <div id="seenmsg" class="muted note"></div>
     <table><tbody id="seen"></tbody></table>
     <button class="tiny" id="seenmore" hidden>Show more</button>
   </section>
   <section id="configsec">
-    <h2>Settings
-      <span id="formstatus" class="muted"></span>
-      <button class="tiny right" id="formreload">Reload</button>
-      <button class="primary tiny right" id="formsave" disabled>Save</button>
-    </h2>
-    <div id="formerrors" class="problems" hidden></div>
-    <div id="configform"></div>
+    <div class="settings">
+      <div class="settings-header">
+        <div class="settings-heading">
+          <h2>Settings</h2>
+          <p class="settings-lede">
+            What deal-radar hunts for, how it tells you, and how often it looks.
+          </p>
+        </div>
+        <div class="settings-actions">
+          <span id="formstatus" class="muted" role="status"></span>
+          <button type="button" id="formreload">Reload</button>
+          <button type="button" class="primary" id="formsave" disabled>Save</button>
+        </div>
+      </div>
+      <div id="formerrors" class="problems" hidden></div>
+      <div id="configform"></div>
+    </div>
   </section>
   <section id="logsec">
     <details id="logdetails">
       <summary>
         <span class="dot" id="logdot" title="connection to the running program"></span>
         Activity
-        <span class="muted">— what deal-radar is doing, moment to moment</span>
+        <span class="muted">- what deal-radar is doing, moment to moment</span>
       </summary>
       <div class="log-tools">
         <button class="tiny" id="clearlog">Clear</button>

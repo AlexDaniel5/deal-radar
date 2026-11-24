@@ -1,4 +1,4 @@
-"""Are we actually set up to scan? — plain-language readiness checks.
+"""Are we actually set up to scan? - plain-language readiness checks.
 
 Three things must be true before a first scan can work, and all three happen
 outside the browser today: Chromium must be downloaded, an Anthropic API key
@@ -7,7 +7,7 @@ the UI mentioned none of them and a missing one surfaced as a one-line error
 three seconds after clicking Scan.
 
 Everything here is **pure**: filesystem, environment, and config only. Nothing
-in this module may launch a browser or make a network call — it backs a status
+in this module may launch a browser or make a network call - it backs a status
 endpoint that runs on the event loop, and Playwright's sync API would deadlock
 there. The authoritative browser/network probes live in ``web/setup.py`` and
 run on worker threads.
@@ -29,10 +29,10 @@ from ..marketplaces.registry import IMPLEMENTED_MARKETPLACES
 from ..notifiers.registry import IMPLEMENTED_NOTIFIERS
 
 # State meanings:
-#   ok      — verified good (as far as this cheap check can tell)
-#   warn    — usable, but something needs attention
-#   fail    — scanning cannot work until this is fixed
-#   unknown — we can't tell without a slower check the user must trigger
+#   ok      - verified good (as far as this cheap check can tell)
+#   warn    - usable, but something needs attention
+#   fail    - scanning cannot work until this is fixed
+#   unknown - we can't tell without a slower check the user must trigger
 State = str
 
 
@@ -71,7 +71,7 @@ def check_browser() -> Check:
 
     Deliberately a file probe, not a launch: this runs on the event loop. It
     can't detect a *stale* build that Playwright would reject for a version
-    mismatch — the wizard's explicit "Check browser" action does a real
+    mismatch - the wizard's explicit "Check browser" action does a real
     headless launch for that.
     """
     root = _playwright_browsers_root()
@@ -188,7 +188,7 @@ def check_api_key(
 ) -> Check:
     """Is an Anthropic key present in the environment?
 
-    Presence only — proving the key *works* costs a network round trip, so it's
+    Presence only - proving the key *works* costs a network round trip, so it's
     a separate action. Never returns the key itself; this endpoint is
     unauthenticated on localhost.
 
@@ -210,7 +210,7 @@ def check_api_key(
             state="fail",
             detail="Not saved yet. deal-radar needs this to judge whether a listing is a match.",
             blocking=True,
-            fix="Paste an Anthropic API key below — it's stored on this computer only.",
+            fix="Paste an Anthropic API key below - it's stored on this computer only.",
             action="save_api_key",
             extra={"env_var": name},
         )
@@ -260,7 +260,7 @@ def check_facebook(cfg: AppConfig | None, *, checked: dict[str, Any] | None = No
             state="fail",
             detail="You haven't signed in to Facebook yet.",
             blocking=True,
-            fix="Sign in once here — a browser window opens and the sign-in is saved.",
+            fix="Sign in once here - a browser window opens and the sign-in is saved.",
             action="facebook_login",
             extra={"path": info["path"]},
         )
@@ -282,7 +282,7 @@ def check_facebook(cfg: AppConfig | None, *, checked: dict[str, Any] | None = No
             state="fail",
             detail="Your saved sign-in has expired.",
             blocking=True,
-            fix="Sign in again — it only takes a moment.",
+            fix="Sign in again - it only takes a moment.",
             action="facebook_login",
             extra={"path": info["path"]},
         )
@@ -306,7 +306,7 @@ def check_facebook(cfg: AppConfig | None, *, checked: dict[str, Any] | None = No
             "and an expired one makes scans quietly find nothing."
         ),
         blocking=False,
-        fix="Check it now — takes about 20 seconds.",
+        fix="Check it now - takes about 20 seconds.",
         action="facebook_check",
         extra={"path": info["path"]},
     )

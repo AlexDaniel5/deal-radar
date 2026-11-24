@@ -111,7 +111,7 @@ def _match_list(key: str, old: list[Any], new: list[Any]) -> list[tuple[int | No
         ident = _identity_of(key, entry)
         matched = lookup.get(ident) if ident is not None else None
         if matched is None and new_index < len(old):
-            # No identity match — most often a rename. Falling back to the same
+            # No identity match - most often a rename. Falling back to the same
             # position keeps that a one-field edit instead of rewriting the whole
             # list (and losing the comments inside it). The structural guard
             # still verifies the result, so a wrong guess can't corrupt data.
@@ -205,7 +205,7 @@ def _detect_sequence_indent(text: str) -> tuple[int, int]:
 def _emits_explicit_null(text: str) -> bool:
     """Does this file write ``null`` rather than leaving the value empty?
 
-    Round-tripping loses the distinction, and both mean the same thing — but
+    Round-tripping loses the distinction, and both mean the same thing - but
     silently rewriting ``session_path: null`` to ``session_path:`` is a diff
     the user didn't ask for.
     """
@@ -221,7 +221,7 @@ _FOLD_LONGER_THAN = 80
 def _styled(key: Any, value: Any) -> Any:
     """Give prose values a block-scalar style so the file stays human-editable.
 
-    Recurses, because a whole list or block can be set in one operation — on a
+    Recurses, because a whole list or block can be set in one operation - on a
     first run the entire ``items`` list arrives at once, descriptions included.
     """
     if isinstance(value, dict):
@@ -351,7 +351,7 @@ def write_config(
 
     if etag != current_etag:
         raise ConfigWriteConflict(
-            "Your settings file changed since this page opened — maybe you edited it "
+            "Your settings file changed since this page opened - maybe you edited it "
             "under Advanced, or in a text editor. Reload to see the current settings.",
             current_text=current_text,
         )

@@ -80,7 +80,7 @@ _KEY_PREFIX = "sk-ant-"
 
 
 def env_file_path(config_path: str | Path) -> Path:
-    """The ``.env`` we manage — next to the config file the user is editing."""
+    """The ``.env`` we manage - next to the config file the user is editing."""
     return Path(config_path).resolve().parent / ".env"
 
 
@@ -100,7 +100,7 @@ def save_api_key(config_path: str | Path, cfg: AppConfig | None, key: str) -> di
     if not key:
         raise SetupError("No key was provided.")
     if any(c.isspace() for c in key):
-        raise SetupError("That doesn't look like a key — it contains spaces.")
+        raise SetupError("That doesn't look like a key - it contains spaces.")
     if not key.startswith(_KEY_PREFIX):
         raise SetupError(
             f"Anthropic keys start with '{_KEY_PREFIX}'. Copy the whole key from "
@@ -124,7 +124,7 @@ def clear_api_key(config_path: str | Path, cfg: AppConfig | None) -> dict[str, A
 
 
 def test_api_key(cfg: AppConfig, *, deep: bool = False) -> dict[str, Any]:
-    """Check the key works — and, with ``deep``, that the account can be billed.
+    """Check the key works - and, with ``deep``, that the account can be billed.
 
     The shallow check retrieves the configured model: it costs nothing, and it
     validates both the key *and* that the model name in the config is real.
@@ -174,7 +174,7 @@ def test_api_key(cfg: AppConfig, *, deep: bool = False) -> dict[str, Any]:
             "Your key works and the account can be billed."
             if deep
             else (
-                "Your key works. (This doesn't check you have credit — "
+                "Your key works. (This doesn't check you have credit - "
                 "use the full test for that.)"
             )
         ),
@@ -215,7 +215,7 @@ def send_test_notification(cfg: AppConfig) -> dict[str, Any]:
     return {
         "ok": True,
         "sent": sent,
-        "message": "Sent. Check your phone — it may take a few seconds.",
+        "message": "Sent. Check your phone - it may take a few seconds.",
         "warnings": failures,
     }
 
@@ -253,7 +253,7 @@ def check_facebook_session(cfg: AppConfig) -> dict[str, Any]:
             page.goto("https://www.facebook.com/marketplace/", wait_until="domcontentloaded")
             if "login" in page.url or page.locator("input[name='pass']").count():
                 return _remember_session(
-                    False, "Facebook is asking you to sign in again — the saved sign-in expired."
+                    False, "Facebook is asking you to sign in again - the saved sign-in expired."
                 )
             try:
                 page.wait_for_selector(
@@ -263,7 +263,7 @@ def check_facebook_session(cfg: AppConfig) -> dict[str, Any]:
                 return _remember_session(
                     False,
                     "Signed in, but Facebook didn't show any listings. The sign-in may have "
-                    "expired, or Facebook may be asking for a security check — sign in again.",
+                    "expired, or Facebook may be asking for a security check - sign in again.",
                 )
             return _remember_session(True, "Your Facebook sign-in works.")
         finally:

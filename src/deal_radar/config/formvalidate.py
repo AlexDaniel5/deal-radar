@@ -72,7 +72,7 @@ def cross_field_errors(raw: dict[str, Any]) -> list[dict[str, Any]]:
                             "type": "duplicate_name",
                             "msg": (
                                 f"You already have something called '{name}'. Give this one "
-                                "a different name — deal-radar tracks what it has shown you "
+                                "a different name - deal-radar tracks what it has shown you "
                                 "by name."
                             ),
                         }
@@ -116,7 +116,7 @@ def capability_warnings(raw: dict[str, Any]) -> list[dict[str, Any]]:
 
 # Pydantic error types mapped to something a non-technical reader can act on.
 # Anything unmapped falls through to pydantic's own message rather than being
-# dropped — a confusing error beats a missing one.
+# dropped - a confusing error beats a missing one.
 _FRIENDLY: dict[str, str] = {
     "missing": "{label} is required.",
     "string_too_short": "{label} can't be empty.",

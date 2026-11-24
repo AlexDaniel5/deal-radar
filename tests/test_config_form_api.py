@@ -88,7 +88,7 @@ def test_form_reports_effective_override_values(tmp_path: Path) -> None:
 
 
 def test_form_when_there_is_no_file(tmp_path: Path) -> None:
-    """Must render something rather than 404 — an error page leaves you stuck."""
+    """Must render something rather than 404 - an error page leaves you stuck."""
     body = _client(tmp_path, create=False)[0].get("/api/config/form").json()
     assert body["exists"] is False
     assert body["config"] is None
@@ -167,7 +167,7 @@ def test_validate_rewrites_pydantic_errors_for_humans(tmp_path: Path) -> None:
     config["ai"]["min_rating"] = 9
     body = client.post("/api/config/validate", json={"config": config}).json()
     error = next(e for e in body["errors"] if e["loc"] == ["ai", "min_rating"])
-    assert error["msg"] == "Only text me when a find scores at least… must be 5 or less."
+    assert error["msg"] == "Minimum score must be 5 or less."
     assert error["detail"], "the raw pydantic message is kept for the details disclosure"
 
 

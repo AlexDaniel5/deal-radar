@@ -53,7 +53,7 @@ class MessageDrafter:
 @contextmanager
 def open_drafter(cfg: AppConfig) -> Iterator[MessageDrafter | None]:
     """Yield a ready :class:`MessageDrafter` (owning its store) when messaging is
-    enabled in ``cfg``, else None — so call sites stay a one-line ``with``."""
+    enabled in ``cfg``, else None - so call sites stay a one-line ``with``."""
     if not cfg.messaging.enabled:
         yield None
         return

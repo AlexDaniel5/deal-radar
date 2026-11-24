@@ -1,6 +1,6 @@
 """Turns pipeline progress events into something the status endpoint can serve.
 
-A scan is slow by design — page loads are paced ~25s apart so deal-radar browses
+A scan is slow by design - page loads are paced ~25s apart so deal-radar browses
 at a human rate, and every candidate costs an extra detail-page load. Twenty-five
 candidates is therefore a quarter of an hour or more, during which the old UI
 showed a green dot and nothing else. This holds the latest event, and estimates

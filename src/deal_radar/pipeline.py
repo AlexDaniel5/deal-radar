@@ -42,13 +42,13 @@ class ProgressEvent:
     green dot and nothing else for the whole scan.
 
     ``phase`` is one of:
-      ``searching``  — running one of the item's search phrases
-      ``found``      — the search returned, ``found`` is the running total
-      ``fetching``   — opening a candidate's detail page
-      ``evaluating`` — asking the AI about a candidate
-      ``checked``    — a candidate is done; ``checked``/``of`` advance
-      ``notifying``  — sending the digest
-      ``done``       — this item is finished
+      ``searching``  - running one of the item's search phrases
+      ``found``      - the search returned, ``found`` is the running total
+      ``fetching``   - opening a candidate's detail page
+      ``evaluating`` - asking the AI about a candidate
+      ``checked``    - a candidate is done; ``checked``/``of`` advance
+      ``notifying``  - sending the digest
+      ``done``       - this item is finished
     """
 
     phase: str
@@ -95,7 +95,7 @@ def passes_keyword_filters(listing: Listing, item: ItemConfig) -> bool:
     ``include_keywords`` are deliberately NOT a hard AND filter: a marketplace
     card's text is sparse (component details like 'carbon' or 'rtx' live on the
     item's detail page, not the card), so requiring all/any of them here rejected
-    genuine matches. Includes are now a soft signal — the AI evaluator judges the
+    genuine matches. Includes are now a soft signal - the AI evaluator judges the
     real 'match' from the item description; only obvious junk (exclude_keywords)
     and out-of-range prices are filtered cheaply up front.
     """

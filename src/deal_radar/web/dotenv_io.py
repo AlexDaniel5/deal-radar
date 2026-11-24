@@ -47,8 +47,8 @@ def _write_private(path: Path, lines: list[str]) -> None:
 def upsert_env_var(path: str | Path, name: str, value: str) -> Path:
     """Set ``name`` in the ``.env`` at ``path``, preserving everything else.
 
-    Replaces the variable in place if it is already there — keeping its
-    position, and keeping every other line and comment untouched — otherwise
+    Replaces the variable in place if it is already there - keeping its
+    position, and keeping every other line and comment untouched - otherwise
     appends it.
     """
     p = Path(path)

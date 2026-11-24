@@ -7,9 +7,9 @@ import {
   fmtMoney,
   linkTo,
   onConnectionChange,
-} from '/static/common.js';
-import { refreshSetup } from '/static/setup.js';
-import { initConfigForm } from '/static/config.js';
+} from './common.js';
+import { refreshSetup } from './setup.js';
+import { initConfigForm } from './config.js';
 
 const BEST_EMPTY = '<tr><td class="muted">Nothing found yet. Run a scan and anything worth a look will appear here.</td></tr>';
 const LOG_MAX_LINES = 1000;
@@ -30,12 +30,12 @@ async function refreshStatus() {
   const t = $('#statustext');
   dot.className = 'dot' + (s.stopping ? ' stop' : s.running ? ' on' : '');
   t.textContent = s.stopping
-    ? 'stopping — finishing the current listing, up to 30 seconds'
+    ? 'stopping - finishing the current listing, up to 30 seconds'
     : s.running
       ? MODE_LABEL[s.mode] || 'running'
       : 'idle';
   t.className = s.error ? 'err' : 'muted';
-  if (s.error) t.textContent += ' — last error: ' + s.error;
+  if (s.error) t.textContent += ' - last error: ' + s.error;
 
   // What this scan has actually cost so far, measured (not estimated).
   const spend = $('#spend');
@@ -78,7 +78,7 @@ function showProgress(s) {
   $('#progressfill').style.width = (fraction * 100).toFixed(1) + '%';
 
   const where =
-    p.item_count > 1 ? ` (${p.item_index} of ${p.item_count}: ${p.item})` : ` — ${p.item}`;
+    p.item_count > 1 ? ` (${p.item_index} of ${p.item_count}: ${p.item})` : ` - ${p.item}`;
   const counted = of ? `Checked ${p.checked} of ${of}` : `Found ${p.found}`;
   $('#progresswhat').textContent =
     `${p.message}${where}. ${counted}` +
@@ -109,7 +109,7 @@ async function refreshCost() {
   $('#costtext').textContent =
     `A scan checks up to ${p.max_listings_checked} listings ` +
     `(${p.items} × ${p.max_evaluations_per_item}) and may cost about ` +
-    `$${p.max_cost.toFixed(2)}. Usually much less — listings already checked are skipped. ` +
+    `$${p.max_cost.toFixed(2)}. Usually much less - listings already checked are skipped. ` +
     `“Keep watching” repeats that about every ${mins} minutes until you stop it.`;
 }
 
@@ -138,7 +138,7 @@ async function scanner(action) {
 
 function seenRow(r) {
   // A null rating means the listing was filtered out before the AI ever saw it
-  // — the price was outside your range, or it matched an excluded word. It does
+  // - the price was outside your range, or it matched an excluded word. It does
   // NOT mean "failed to scrape": an evaluation error never reaches the store at
   // all (pipeline.py), so the old "not fully scraped / not evaluated" tooltip
   // conflated two things, one of which cannot happen.
@@ -180,7 +180,7 @@ async function clearSeen() {
   if (
     !confirm(
       'Forget every listing deal-radar has checked?\n\n' +
-        'They can turn up again in a future scan — and be paid for again.',
+        'They can turn up again in a future scan - and be paid for again.',
     )
   ) {
     return;
@@ -229,7 +229,7 @@ function draftCard(r) {
   const offer =
     r.offer_price != null ? asking + ' &rarr; offer $' + r.offer_price : asking + ' (asking price)';
   card.innerHTML =
-    '<span class="muted">' + fmtDate(r.created_ts) + '</span> <b>' + esc(r.item_name) + '</b> — ' +
+    '<span class="muted">' + fmtDate(r.created_ts) + '</span> <b>' + esc(r.item_name) + '</b> - ' +
     linkTo(r.url, r.title) + ' · ' + offer +
     (r.status === 'sending' ? ' · <span class="muted">sending…</span>' : '') +
     (r.error ? ' · <span class="err">' + esc(r.error) + '</span>' : '');
@@ -257,7 +257,7 @@ async function loadDrafts() {
   const active = document.activeElement;
   if (active && active.closest && active.closest('#drafts')) return; // don't clobber an edit
   const j = await api('/api/drafts');
-  // Hidden entirely when messaging is off — an empty panel is just noise.
+  // Hidden entirely when messaging is off - an empty panel is just noise.
   $('#draftsec').hidden = !(j.rows || []).length && !j.messaging_enabled;
   const el = $('#drafts');
   el.textContent = '';

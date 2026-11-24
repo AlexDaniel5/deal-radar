@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
+import re
 import shutil
 import tempfile
 import urllib.parse
@@ -14,7 +16,7 @@ from typing import Any
 
 import yaml
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
@@ -55,6 +57,41 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 # quiet before sending a comment frame to keep the connection alive.
 _SSE_POLL_SECONDS = 0.7
 _SSE_HEARTBEAT_SECONDS = 15.0
+
+
+_VERSION_SEGMENT = re.compile(r"^v[0-9a-f]{12}$")
+
+
+def _static_version() -> str:
+    """A short hash of the static files' names, sizes and mtimes.
+
+    It goes into every asset URL the page uses, so editing any file gives the
+    page new URLs and no browser cache (memory, disk or heuristic) can hand back
+    an old copy. Recomputed per page load: a handful of stat() calls.
+    """
+    digest = hashlib.sha1()
+    for path in sorted(STATIC_DIR.iterdir()):
+        stat = path.stat()
+        digest.update(f"{path.name}:{stat.st_size}:{stat.st_mtime_ns};".encode())
+    return "v" + digest.hexdigest()[:12]
+
+
+class _RevalidatingStaticFiles(StaticFiles):
+    """Static files under an optional version segment, always revalidated.
+
+    /static/v<hash>/main.js serves main.js; the segment only exists to change
+    the URL. no-cache still allows a cheap 304 when nothing changed.
+    """
+
+    def get_path(self, scope: Any) -> str:
+        path = super().get_path(scope)
+        head, sep, rest = path.partition(os.sep)
+        return rest if sep and _VERSION_SEGMENT.match(head) else path
+
+    def file_response(self, *args: Any, **kwargs: Any) -> Any:
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
 def _atomic_write(path: Path, text: str) -> None:
@@ -248,7 +285,7 @@ async def _guard_state_changing_requests(request: Request, call_next: Any) -> An
 
     The server has no auth, so before this guard any page the user happened to
     be browsing could POST a form to 127.0.0.1 and overwrite their config or
-    start a paid scan — no preflight is required for a simple form POST, and
+    start a paid scan - no preflight is required for a simple form POST, and
     the attacker never needs to read the response. Requiring JSON forces a
     CORS preflight, which the browser blocks because we send no CORS headers.
     """
@@ -314,14 +351,16 @@ def create_app(
     fb_check = BackgroundJob("deal-radar-fb-check")
 
     app.middleware("http")(_guard_state_changing_requests)
-    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    app.mount("/static", _RevalidatingStaticFiles(directory=STATIC_DIR), name="static")
 
-    @app.get("/", response_class=FileResponse)
-    def index() -> FileResponse:
-        # no-cache on the shell only: the hashed-by-mtime assets under /static
-        # revalidate cheaply, but a stale shell would survive an upgrade.
-        return FileResponse(
-            STATIC_DIR / "index.html",
+    @app.get("/", response_class=HTMLResponse)
+    def index() -> HTMLResponse:
+        # The shell is never cached, and it points at versioned asset URLs, so
+        # a changed script can't be served from any browser cache.
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        html = html.replace('"/static/', f'"/static/{_static_version()}/')
+        return HTMLResponse(
+            html,
             headers={
                 "Cache-Control": "no-cache",
                 # Blocks every external origin, so the "no CDN, works offline"
@@ -401,7 +440,7 @@ def create_app(
         return build_formspec()
 
     def _raw_config() -> tuple[str, dict[str, Any] | None, ConfigError | None]:
-        """The file's text and parsed mapping — env refs left unresolved."""
+        """The file's text and parsed mapping - env refs left unresolved."""
         if not cfg_path.is_file():
             return "", None, None
         text = cfg_path.read_text(encoding="utf-8")
@@ -479,7 +518,7 @@ def create_app(
                 "warnings": warnings,
                 "defaults": _schema_defaults(),
                 "effective": _effective(cfg),
-                # Booleans only — never the values.
+                # Booleans only - never the values.
                 "env": {name: name in os.environ for name in collect_env_refs(text)},
                 "starter_topic": random_topic(),
             },
@@ -773,15 +812,15 @@ def create_app(
             return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
 
     def _require_no_browser_in_use() -> JSONResponse | None:
-        """Only one Playwright browser at a time — scans, sends and logins share it."""
+        """Only one Playwright browser at a time - scans, sends and logins share it."""
         if ctl.is_running():
             return JSONResponse(
-                {"ok": False, "error": "Stop the scan first — only one browser at a time."},
+                {"ok": False, "error": "Stop the scan first - only one browser at a time."},
                 status_code=409,
             )
         if snd.is_busy():
             return JSONResponse(
-                {"ok": False, "error": "A message is being sent — try again in a moment."},
+                {"ok": False, "error": "A message is being sent - try again in a moment."},
                 status_code=409,
             )
         return None

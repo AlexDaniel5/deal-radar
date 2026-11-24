@@ -32,7 +32,7 @@ def test_log_level_defaults_to_info() -> None:
 
 def test_run_once_defaults() -> None:
     args = build_parser().parse_args(["run-once"])
-    # None means "use the scan: block in the config" — the flags are overrides
+    # None means "use the scan: block in the config" - the flags are overrides
     # now, so the web UI and the polling loop honour the same setting.
     assert args.limit is None
     assert args.max_evals is None

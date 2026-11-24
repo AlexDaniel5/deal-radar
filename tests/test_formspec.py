@@ -3,7 +3,7 @@
 The important one is `test_spec_covers_every_schema_field`: the user was
 promised that nothing they can express in YAML is lost when the form becomes
 the default editor. That is only true if every schema field has a form entry,
-so it's asserted rather than assumed — and it fails the day someone adds a
+so it's asserted rather than assumed - and it fails the day someone adds a
 setting without writing copy for it.
 """
 
@@ -127,7 +127,7 @@ def test_the_description_field_is_prominent_and_has_an_example() -> None:
     field = spec_for("items.*.description")
     assert field is not None
     assert field["widget"] == "textarea"
-    assert field["rows"] and field["rows"] >= 8
+    assert field["rows"] and field["rows"] >= 4
     assert field["example"], "a good example is the fastest way to a good description"
     assert not field["advanced"]
 

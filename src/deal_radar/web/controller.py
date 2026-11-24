@@ -1,7 +1,7 @@
 """Runs the scanner in a background thread so the web server can control it.
 
 The scanner uses Playwright's sync API, which must NOT run inside an asyncio
-event loop — so it runs in a dedicated worker thread here, separate from
+event loop - so it runs in a dedicated worker thread here, separate from
 uvicorn's loop (see :class:`~deal_radar.web.worker.BackgroundJob`, which owns
 the threading). The controller is deliberately generic: it takes two job
 callables (loop / once), each receiving a stop Event, so it can be unit-tested

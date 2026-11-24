@@ -52,7 +52,7 @@ _DETAIL_TRAILING_MARKERS = ("Seller information", "Seller details")
 _BADGE_RE = re.compile(r"^(just listed|new)$", re.IGNORECASE)
 # The PDP message composer. FB prefills "Is this available?" in a box near a Send
 # button; sometimes it sits behind a "Message"/"Send message" button that opens a
-# dialog. Not contractual — tune against a headful run if FB shifts.
+# dialog. Not contractual - tune against a headful run if FB shifts.
 _MSG_TEXTBOX_SELECTORS = (
     'textarea[aria-label*="message" i]',
     'div[role="textbox"][aria-label*="message" i]',
@@ -113,7 +113,7 @@ def _extract_detail_text(page: Any) -> str:
     """Pull the listing description from a detail page (best-effort, may be empty).
 
     Prefers a targeted description container; falls back to the whole main content
-    region (noisy but contains the specs) when the selectors miss — which they will
+    region (noisy but contains the specs) when the selectors miss - which they will
     whenever Facebook reshuffles its obfuscated DOM. Tune ``_DETAIL_TEXT_SELECTORS``
     against the ``detail id=... text[...]`` DEBUG output from a live run.
     """
@@ -130,7 +130,7 @@ def _extract_detail_text(page: Any) -> str:
     if len(best) >= _DETAIL_MIN_USEFUL:
         return best  # a targeted container matched cleanly; use it as-is
 
-    # Targeted selectors missed (or gave only a stub) — fall back to the main region.
+    # Targeted selectors missed (or gave only a stub) - fall back to the main region.
     main = _safe_inner_text(page, _DETAIL_MAIN_SELECTOR)
     if main:
         candidates.append(_trim_main_text(main)[:_DETAIL_MAX_CHARS])
@@ -241,7 +241,7 @@ def _relevance_tokens(item: ItemConfig) -> set[str]:
     unrelated categories; scrolling deep to raise coverage scoops them up (BBQs,
     apartments). A collected card must share at least one of these words. The
     vocabulary is derived only from the item's own ``search_phrases`` and
-    ``include_keywords`` so the gate stays generic (a 'bike' item works too) — it
+    ``include_keywords`` so the gate stays generic (a 'bike' item works too) - it
     is a coarse relevance check on the sparse card text, NOT the spec match, which
     the AI still judges on the detail page.
     """
@@ -256,7 +256,7 @@ def _prefer_detail_text(detail: str, title: str) -> bool:
 
     The card ``description`` is mostly just the title again (title + price +
     location), and the AI is already shown the title on its own line. So the real
-    body should win whenever it adds anything beyond the title — comparing against
+    body should win whenever it adds anything beyond the title - comparing against
     the *title* rather than the whole card blob stops a spec-rich title from
     causing a shorter-but-real description to be discarded (which left the AI
     judging on the title alone).
@@ -315,7 +315,7 @@ def read_session_state(path: Path) -> dict[str, Any]:
     """Summarise a saved session file without launching a browser.
 
     Cheap enough for a status endpoint. Note this only reports what the file
-    *claims* — Facebook can invalidate a session server-side at any time, so a
+    *claims* - Facebook can invalidate a session server-side at any time, so a
     ``looks_valid`` result still needs the live probe to be trusted.
     """
     info: dict[str, Any] = {
@@ -515,7 +515,7 @@ class FacebookMarketplace:
         Best-effort DOM automation; raises :class:`SendError` when the composer
         can't be found or the click fails. On an *ambiguous* outcome (the click
         went through but confirmation is unclear) we log a warning and treat the
-        message as sent — double-sending is worse than a missed send, and the
+        message as sent - double-sending is worse than a missed send, and the
         thread is visible in Messenger either way.
         """
         if self._context is None:
@@ -591,7 +591,7 @@ class FacebookMarketplace:
             log.debug("detail id=%s images=%d first=%r", listing.id, len(images), images[0][:120])
             updates["image_urls"] = images
         # Use the detail body whenever it adds anything beyond the title (which the
-        # AI already sees separately) — not just when it beats the whole card blob.
+        # AI already sees separately) - not just when it beats the whole card blob.
         if _prefer_detail_text(text, listing.title):
             log.debug("detail id=%s text[%d]=%r", listing.id, len(text), text[:300])
             updates["description"] = text

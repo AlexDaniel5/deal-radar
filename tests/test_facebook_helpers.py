@@ -230,7 +230,7 @@ def test_prefer_detail_text_over_title() -> None:
 
 
 def test_card_relevance_drops_piece_sets() -> None:
-    # "N pc"/"N pcs" abbreviates "piece" (furniture), not PC — must be dropped.
+    # "N pc"/"N pcs" abbreviates "piece" (furniture), not PC - must be dropped.
     tokens = _relevance_tokens(_pc_item())
     assert not _card_is_relevant("7 pc dining table set delivery available", tokens)
     assert not _card_is_relevant("3 pc sofa set delivery available", tokens)

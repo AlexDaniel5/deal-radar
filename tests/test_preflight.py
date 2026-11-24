@@ -1,6 +1,6 @@
 """Tests for the readiness checks behind the setup wizard.
 
-Everything here must stay pure — no browser, no network. The fixtures below
+Everything here must stay pure - no browser, no network. The fixtures below
 build fake browser roots and session files on disk so the checks can be driven
 into every state without touching the real machine.
 """

@@ -44,7 +44,7 @@ class MessagingConfig(BaseModel):
     """Drafting messages to sellers on matched listings (OFF by default; ToS-sensitive).
 
     When enabled, a match creates a *draft* message that must be approved in the
-    web UI before anything is sent — nothing ever goes out automatically.
+    web UI before anything is sent - nothing ever goes out automatically.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -70,7 +70,7 @@ class ScheduleConfig(BaseModel):
 
 
 class ScanConfig(BaseModel):
-    """How much work — and therefore how much money — one scan may spend.
+    """How much work - and therefore how much money - one scan may spend.
 
     These used to be CLI flags only, which meant the web UI and the polling
     loop silently used the hardcoded defaults (100 evaluations per item, every

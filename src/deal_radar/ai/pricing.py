@@ -39,10 +39,10 @@ class ModelChoice:
 # Only models that support the structured-output path the evaluator relies on
 # (``client.messages.parse(..., output_format=Verdict)``). Offering anything
 # else would hand the user a config that validates fine and then fails on the
-# first evaluation — notably ``claude-sonnet-4-6``, which is priced above but
+# first evaluation - notably ``claude-sonnet-4-6``, which is priced above but
 # is NOT on the structured-outputs list.
 SUPPORTED_MODELS: tuple[ModelChoice, ...] = (
-    ModelChoice("claude-haiku-4-5", "Haiku 4.5", "Recommended — cheapest and fastest"),
+    ModelChoice("claude-haiku-4-5", "Haiku 4.5", "Recommended - cheapest and fastest"),
     ModelChoice("claude-sonnet-5", "Sonnet 5", "Smarter, about 3× the cost"),
     ModelChoice("claude-opus-4-8", "Opus 4.8", "Most capable, about 5× the cost"),
 )
