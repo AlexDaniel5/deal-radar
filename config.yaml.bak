@@ -1,0 +1,65 @@
+# deal-radar config template. Copy to config.yaml (gitignored) and edit.
+# Secrets must NOT go here directly — use ${ENV_VAR} references (resolved from
+# the environment / .env). The Anthropic API key is read from the environment
+# by the evaluator and is not referenced in this file.
+version: 1
+
+ai:
+  provider: anthropic
+  model: claude-haiku-4-5      # cheap/fast for high-volume classification
+  min_rating: 4               # 1-5; only notify at/above this
+  analyze_images: false       # true => send listing photos to Claude (higher cost)
+  max_images: 3
+
+marketplaces:
+  facebook:
+    enabled: true
+    session_path:              # null => data dir default; persisted login state
+    default_location: "Toronto, ON"
+    default_radius_km: 40
+
+schedule:
+  poll_interval_seconds: 1800   # 30 min — conservative / polite
+  jitter_seconds: 600
+  per_request_min_interval_seconds: 25
+
+# How much one scan may spend. Every AI evaluation is a paid API call, so this
+# is the cost cap — and unlike the old CLI-only flags, the polling loop honours
+# it too. 25 x 2 items is roughly a nickel a scan on claude-haiku-4-5; the first
+# scan costs the most, because after that already-checked listings are skipped.
+# Set max_evaluations_per_item to 0 for a free, scrape-only run.
+scan:
+  max_evaluations_per_item: 50
+  max_listings_per_search: 200
+
+# Seller messaging (EXPERIMENTAL — read the README warning; default OFF).
+# When enabled, a match creates a *draft* message you review and approve in the
+# web UI before it is sent; nothing ever goes out automatically.
+messaging:
+  enabled: false
+  negotiate: false      # true => drafts open with an offer instead of asking price
+  offer_percent: 90     # offer = 90% of asking, rounded to the nearest $5, never above asking
+
+notifiers:
+  - type: ntfy
+    topic: your-ntfy-topic-here
+    server: https://ntfy.sh
+  # Telegram example (uncomment and set env vars to use):
+  # - type: telegram
+  #   bot_token: ${TELEGRAM_BOT_TOKEN}
+  #   chat_id: ${TELEGRAM_CHAT_ID}
+
+items:
+  - name: "Gaming PC (RTX 30-series)"
+    enabled: true
+    marketplaces: [facebook]
+    search_phrases: ["gaming pc", "gaming computer", "rtx 3070", "rtx 3080"]
+    include_keywords: ["rtx", "ryzen", "intel i7", "i9"]
+    exclude_keywords: ["broken", "for parts", "prebuilt office", "gtx 1050"]
+    price_min: 800
+    price_max: 1700
+    location: "guelph, ON"
+    radius_km: 75
+    description: |
+      A modern gaming desktop with an RTX 3070 or better and a Ryzen 5/7 or Intel i5/i7 (10th gen or newer). Want 16GB+ DDR5 RAM. Not interested in old office PCs, GTX 16-series cards, or parts-only units. A good deal is meaningfully below typical local resale for the GPU.
+

@@ -50,6 +50,12 @@ _DETAIL_MAX_CHARS = 2500  # cap the main-region fallback (keeps token cost sane)
 _DETAIL_TRAILING_MARKERS = ("Seller information", "Seller details")
 # Status badges Facebook prepends to a card's text; never a real title.
 _BADGE_RE = re.compile(r"^(just listed|new)$", re.IGNORECASE)
+# A card's price line is *only* a price ("CA$1,350", "$80", "Free"). Titles often
+# mention a price too ("... Rims $800 2nd Gen"), and matching on a bare "$" took
+# those for price lines - the real title was then skipped and "CA$1,350" shown.
+_PRICE_LINE_RE = re.compile(
+    r"^(?:[A-Za-z]{0,3}\s?[$€£]\s?\d[\d,]*(?:\.\d+)?|free)$", re.IGNORECASE
+)
 # The PDP message composer. FB prefills "Is this available?" in a box near a Send
 # button; sometimes it sits behind a "Message"/"Send message" button that opens a
 # dialog. Not contractual - tune against a headful run if FB shifts.
@@ -200,7 +206,7 @@ def _parse_card_text(text: str) -> tuple[float | None, str, str | None]:
     price: float | None = None
     price_indices: list[int] = []
     for i, ln in enumerate(lines):
-        if "$" in ln or "free" in ln.lower():
+        if _PRICE_LINE_RE.match(ln):
             parsed = _parse_price(ln)
             if parsed is not None:
                 price_indices.append(i)
@@ -423,50 +429,88 @@ class FacebookMarketplace:
                 try:
                     page.goto(url, wait_until="domcontentloaded")
                     page.wait_for_selector(_ITEM_ANCHOR, timeout=self._page_timeout_ms)
-                    self._scroll_until_loaded(page)
+                    # If Facebook redirects and drops `query=`, every phrase returns
+                    # the same generic price-filtered feed; make that visible.
+                    log.debug("facebook search url=%s landed=%s", url, page.url)
+                    if "query=" not in page.url:
+                        log.warning(
+                            "facebook dropped the search text for %r (landed on %s)",
+                            phrase,
+                            page.url,
+                        )
                 except Exception as exc:  # noqa: BLE001 - skip a failed phrase, keep going
                     log.warning("facebook search for %r failed: %s", phrase, exc)
                     continue
-                yield from self._collect(page, seen_ids, tokens)
+                yield from self._scroll_and_collect(page, seen_ids, tokens)
         finally:
             page.close()
 
-    def _scroll_until_loaded(self, page: Any) -> None:
-        """Scroll the results feed until it stops growing or enough cards loaded.
-
-        Facebook lazy-loads listing cards as you scroll, so a fixed scroll count
-        silently caps how many listings we ever see (the old 2-scroll default only
-        surfaced the ~40 newest). Keep scrolling while new anchors keep appearing,
-        bounded by ``max_results`` and a hard scroll ceiling so a bottomless feed
-        can't hang the run.
-        """
-        previous = 0
-        stagnant = 0
-        for _ in range(self._max_scrolls):
-            count = len(page.query_selector_all(_ITEM_ANCHOR))
-            if count >= self._max_results:
-                break
-            if count == previous:
-                stagnant += 1
-                if stagnant >= 3:  # no new cards after several tries: feed exhausted
-                    break
-            else:
-                stagnant = 0
-            previous = count
-            page.mouse.wheel(0, 6000)
-            page.wait_for_timeout(1200)
-
-    def _collect(
+    def _scroll_and_collect(
         self, page: Any, seen_ids: set[str], tokens: set[str]
     ) -> Iterator[Listing]:
+        """Harvest cards after every scroll step, until the feed stops yielding.
+
+        Facebook virtualises the results feed: cards scrolled far off-screen are
+        removed from the DOM. Scrolling to the bottom first and reading once at
+        the end therefore saw only the unrelated 'suggested' padding at the tail
+        - the real matches at the top were already gone, so every phrase came
+        back with the same generic feed and nothing matched. Reading as we go
+        catches each card while it is still mounted.
+
+        Stops when no new cards appear for a few scrolls, when ``max_results`` is
+        reached, or once the feed has turned into padding (new cards keep coming
+        but none are relevant) - scrolling further only loads more padding.
+        """
+        encountered: set[str] = set()
+        stagnant = 0
+        padding_steps = 0
+        for step in range(self._max_scrolls + 1):
+            before_seen = len(encountered)
+            before_kept = len(seen_ids)
+            yield from self._collect(page, seen_ids, tokens, encountered)
+            if len(seen_ids) >= self._max_results:
+                return
+            new_cards = len(encountered) - before_seen
+            if new_cards == 0:
+                stagnant += 1
+                if stagnant >= 3:  # nothing new after several tries: feed exhausted
+                    return
+            else:
+                stagnant = 0
+                if len(seen_ids) == before_kept:
+                    padding_steps += 1
+                    if padding_steps >= 2:
+                        log.debug("feed turned into unrelated padding; stop scrolling")
+                        return
+                else:
+                    padding_steps = 0
+            if step < self._max_scrolls:
+                page.mouse.wheel(0, 6000)
+                page.wait_for_timeout(1200)
+
+    def _collect(
+        self,
+        page: Any,
+        seen_ids: set[str],
+        tokens: set[str],
+        encountered: set[str] | None = None,
+    ) -> Iterator[Listing]:
+        """Yield the relevant, not-yet-seen cards currently in the DOM.
+
+        ``encountered`` records every card id looked at (relevant or not) so a
+        card still mounted on the next scroll pass is not parsed and logged again.
+        """
+        if encountered is None:
+            encountered = set()
         anchors = page.query_selector_all(_ITEM_ANCHOR)
         for anchor in anchors:
             if len(seen_ids) >= self._max_results:
                 return
             href = anchor.get_attribute("href") or ""
             item_id = _extract_item_id(href)
-            if item_id is None or item_id in seen_ids:
+            if item_id is None or item_id in seen_ids or item_id in encountered:
                 continue
+            encountered.add(item_id)
             try:
                 text = anchor.inner_text()
             except Exception:  # noqa: BLE001 - element may have detached

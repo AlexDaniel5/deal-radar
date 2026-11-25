@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from deal_radar.config.schema import ItemConfig, MarketplaceConfig
 from deal_radar.marketplaces.facebook import (
     _DETAIL_MAIN_SELECTOR,
@@ -238,3 +240,87 @@ def test_card_relevance_drops_piece_sets() -> None:
     # But a real "gaming pc" (no digit before pc) is still kept.
     assert _card_is_relevant("Gaming PC in great condition", tokens)
     assert _card_is_relevant("RTX 3080 Gaming PC", tokens)
+
+
+@pytest.mark.parametrize(
+    ("text", "title"),
+    [
+        # Real cards from a scan log: the title mentions its own price.
+        (
+            "CA$1,350\nBRAND NEW CONDITION 4 x 195/65/15 GOODYEAR WINTER TIRES $1350\nToronto, ON",
+            "BRAND NEW CONDITION 4 x 195/65/15 GOODYEAR WINTER TIRES $1350",
+        ),
+        ("CA$800\nTesla Model 3 Sport 19\" 4 Rims $800 2nd Gen\nToronto, ON",
+         "Tesla Model 3 Sport 19\" 4 Rims $800 2nd Gen"),
+        ("CA$1,500\nCA$1,700\nWinter package on 18-inch alloys\nToronto, ON",
+         "Winter package on 18-inch alloys"),
+        ("Free\nOld desk\nToronto, ON", "Old desk"),
+    ],
+)
+def test_parse_card_text_title_that_mentions_a_price(text: str, title: str) -> None:
+    price, parsed_title, location = _parse_card_text(text)
+    assert parsed_title == title
+    assert location == "Toronto, ON"
+    assert price is not None
+
+
+class _FakeAnchor:
+    def __init__(self, item_id: str, text: str) -> None:
+        self._id, self._text = item_id, text
+
+    def get_attribute(self, name: str) -> str:
+        return f"/marketplace/item/{self._id}/"
+
+    def inner_text(self) -> str:
+        return self._text
+
+
+class _VirtualFeed:
+    """Mimics Facebook's feed: only a window of cards is mounted at any time,
+    and scrolling slides the window down, unmounting the cards above it."""
+
+    def __init__(self, cards: list[tuple[str, str]], window: int = 8, step: int = 6) -> None:
+        self.cards, self.window, self.step, self.top = cards, window, step, 0
+        self.scrolls = 0
+
+    def query_selector_all(self, selector: str) -> list[_FakeAnchor]:
+        return [_FakeAnchor(i, t) for i, t in self.cards[self.top : self.top + self.window]]
+
+    @property
+    def mouse(self) -> "_VirtualFeed":
+        return self
+
+    def wheel(self, dx: int, dy: int) -> None:
+        self.scrolls += 1
+        self.top = min(self.top + self.step, max(len(self.cards) - self.window, 0))
+
+    def wait_for_timeout(self, ms: int) -> None:
+        pass
+
+
+def _feed() -> _VirtualFeed:
+    matches = [(str(100 + n), f"$900\nGaming PC RTX 30{n:02d}\nToronto, ON") for n in range(20)]
+    padding = [(str(900 + n), f"$1,200\nLeather sofa {n}\nToronto, ON") for n in range(60)]
+    return _VirtualFeed(matches + padding)
+
+
+def test_scroll_collects_matches_before_the_feed_unmounts_them() -> None:
+    """Regression: reading only after scrolling to the bottom saw nothing but padding."""
+    from deal_radar.marketplaces.facebook import FacebookMarketplace
+
+    mk = FacebookMarketplace(MarketplaceConfig(), max_scrolls=40)
+    page = _feed()
+    tokens = {"gaming", "pc", "rtx"}
+    got = list(mk._scroll_and_collect(page, set(), tokens))
+
+    assert {listing.id for listing in got} == {str(100 + n) for n in range(20)}
+    # It stops once the feed is only padding, rather than scrolling to the end.
+    assert page.scrolls < 15
+
+
+def test_scroll_stops_at_max_results() -> None:
+    from deal_radar.marketplaces.facebook import FacebookMarketplace
+
+    mk = FacebookMarketplace(MarketplaceConfig(), max_results=5)
+    got = list(mk._scroll_and_collect(_feed(), set(), {"gaming", "pc"}))
+    assert len(got) == 5
