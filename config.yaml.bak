@@ -15,8 +15,9 @@ marketplaces:
   facebook:
     enabled: true
     session_path:              # null => data dir default; persisted login state
-    default_location: "Toronto, ON"
-    default_radius_km: 40
+    # Facebook ignores these and uses the location saved on your account (set in Marketplace).
+    default_location: "Guelph, ON"
+    default_radius_km: 250
 
 schedule:
   poll_interval_seconds: 1800   # 30 min — conservative / polite
@@ -42,7 +43,7 @@ messaging:
 
 notifiers:
   - type: ntfy
-    topic: your-ntfy-topic-here
+    topic: deal-radar-Nov-178
     server: https://ntfy.sh
   # Telegram example (uncomment and set env vars to use):
   # - type: telegram
@@ -50,16 +51,17 @@ notifiers:
   #   chat_id: ${TELEGRAM_CHAT_ID}
 
 items:
-  - name: "Gaming PC (RTX 30-series)"
+  - name: "Gaming PC"
     enabled: true
     marketplaces: [facebook]
-    search_phrases: ["gaming pc", "gaming computer", "rtx 3070", "rtx 3080"]
-    include_keywords: ["rtx", "ryzen", "intel i7", "i9"]
+    search_phrases: ["gaming pc", "gaming computer", "rtx 3070", "rtx 3080", "rx 6800", "rx
+          7800 xt", "radeon gaming pc"]
+    include_keywords: ["rtx", "radeon", "rx", "ryzen", "intel i7", "i9"]
     exclude_keywords: ["broken", "for parts", "prebuilt office", "gtx 1050"]
     price_min: 800
     price_max: 1700
-    location: "guelph, ON"
-    radius_km: 75
+    location: "Guelph, ON"
+    radius_km: 250
     description: |
-      A modern gaming desktop with an RTX 3070 or better and a Ryzen 5/7 or Intel i5/i7 (10th gen or newer). Want 16GB+ DDR5 RAM. Not interested in old office PCs, GTX 16-series cards, or parts-only units. A good deal is meaningfully below typical local resale for the GPU.
+      A modern gaming desktop with an Nvidia RTX 3070 / AMD Radeon RX 6700 XT or better (Nvidia or AMD only, no Intel Arc) and a Ryzen 5/7 or Intel i5/i7 (10th gen or newer). Want 16GB+ RAM; DDR5 preferred, but DDR4 is fine. An SSD is a bonus. Not interested in old office PCs, GTX 16-series cards, or parts-only units. A good deal is meaningfully below typical local resale for the GPU.
 

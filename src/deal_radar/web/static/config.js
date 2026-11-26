@@ -547,37 +547,61 @@ function marketplaceControl(path, values) {
   return box;
 }
 
-/** A per-item override: a "use my default" checkbox that reveals the control. */
+/**
+ * A per-item override. The control is always shown, starting at the global
+ * default, so it can be edited straight away; editing it makes the value this
+ * hunt's own. "Reset to default" drops the override so the hunt follows the
+ * global setting again (including later changes to it).
+ */
 function renderOverride(path, fieldSpec, fallback) {
   const wrap = document.createElement('div');
   wrap.className = 'field field-wide override';
-  const row = document.createElement('label');
-  row.className = 'checkbox';
-  const useDefault = document.createElement('input');
-  useDefault.type = 'checkbox';
-  useDefault.checked = getIn(draft, path) == null;
   const shown = fallback === true ? 'yes' : fallback === false ? 'no' : fallback;
-  row.append(useDefault, document.createTextNode(` Use my default (${shown})`));
-  wrap.appendChild(row);
+
+  const reset = document.createElement('button');
+  reset.type = 'button';
+  reset.className = 'tiny';
+  reset.textContent = 'Reset to default';
+  reset.title = `Go back to your default (${shown})`;
+
   const holder = document.createElement('div');
-  holder.hidden = useDefault.checked;
+  const refresh = () => {
+    reset.disabled = getIn(draft, path) == null;
+  };
   const build = () => {
     holder.textContent = '';
     const field = renderField(path, { ...fieldSpec, default: fallback });
-    if (field) holder.appendChild(field);
+    if (!field) return;
+    // Number inputs show an unset value as a blank box with a placeholder;
+    // show the real default instead, so it reads as a value you can change.
+    const num = field.querySelector('input[type="number"]');
+    if (num && num.value === '' && getIn(draft, path) == null && fallback != null) {
+      num.value = String(fallback);
+    }
+    // Put the reset button on the same line as the field's name.
+    const head = document.createElement('div');
+    head.className = 'override-head';
+    const label = field.querySelector(':scope > .field-label');
+    if (label) {
+      field.insertBefore(head, label);
+      head.append(label, reset);
+    } else {
+      field.prepend(head);
+      head.append(reset);
+    }
+    holder.appendChild(field);
   };
   build();
-  useDefault.onchange = () => {
-    holder.hidden = useDefault.checked;
-    if (useDefault.checked) {
-      setIn(draft, path, undefined);
-    } else {
-      setIn(draft, path, fallback);
-      build();
-    }
+  refresh();
+  // The field's own handlers update the draft first; these bubble up after.
+  for (const ev of ['input', 'change', 'click']) holder.addEventListener(ev, refresh);
+  reset.onclick = () => {
+    setIn(draft, path, undefined);
+    build();
+    refresh();
     markDirty();
   };
-  wrap.appendChild(holder);
+  wrap.append(holder);
   return wrap;
 }
 

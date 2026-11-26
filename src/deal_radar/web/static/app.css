@@ -445,8 +445,21 @@ body.setup-required header [data-scanner] { display: none; }
   padding: 14px 16px; border-radius: 8px; border: 1px solid var(--rule);
   background: var(--s-subtle);
 }
-#configsec .override > .checkbox { font-size: 13px; color: var(--text-dim); }
-#configsec .override > div:not([hidden]) { margin-top: 14px; }
+#configsec .override-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  margin-bottom: 6px;
+}
+#configsec .override-head > .field-label {
+  font-weight: 500; font-size: 13px; color: var(--text);
+}
+#configsec .override-head button:disabled { opacity: 0.5; cursor: default; }
+/* Toggles in an override stack: name + reset on top, the switch right under the name. */
+#configsec .override .field-inline { grid-template-columns: minmax(0, 1fr); }
+#configsec .override .field-inline > .override-head { grid-column: 1; grid-row: 1; }
+#configsec .override .field-inline > input[type='checkbox'] {
+  grid-column: 1; grid-row: 2; justify-self: start;
+}
+#configsec .override .field-inline > .field-help { grid-column: 1; grid-row: 3; margin-top: 6px; }
 
 /* "Show an example" */
 #configsec .example { margin-top: 8px; font-size: 13px; }
