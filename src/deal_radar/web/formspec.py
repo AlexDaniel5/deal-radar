@@ -246,7 +246,6 @@ FIELDS: tuple[dict[str, Any], ...] = (
         "City to search",
         group="items",
         section="Price and area",
-        help="Blank = your default city.",
     ),
     _f(
         "items.*.radius_km",
@@ -255,7 +254,6 @@ FIELDS: tuple[dict[str, Any], ...] = (
         section="Price and area",
         widget="number",
         unit="km",
-        help="Blank = your default distance.",
     ),
     _f(
         "items.*.marketplaces",
@@ -264,6 +262,24 @@ FIELDS: tuple[dict[str, Any], ...] = (
         section="Price and area",
         widget="marketplace-checkboxes",
         help="Only places you've set up.",
+    ),
+    _f(
+        "items.*.super_alert",
+        "Super alert",
+        group="items",
+        section="Super alert",
+        widget="textarea",
+        rows=5,
+        placeholder=(
+            "Paste or describe a listing you'd jump on, and its price. Example: "
+            "i7-10700KF, RTX 3080 10GB, 32GB (2x16GB) DDR4-3600, 1TB NVMe, "
+            "Corsair 850W PSU, 280mm AIO, for CA$1,400."
+        ),
+        help=(
+            "Anything at least this good, at this price or less, is sent to your phone "
+            "straight away as an urgent 6/5 alert - without waiting for the scan to finish. "
+            "Leave empty to turn super alerts off."
+        ),
     ),
     _f(
         "items.*.min_rating",

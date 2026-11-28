@@ -39,6 +39,10 @@ class ProgressTracker:
         self._started: float | None = None
         self._seconds_per_listing = 0.0
         self._checked_at_start = 0
+        # Between scans of a "Keep watching" loop: how the last one went, and
+        # when the next is due - so a quiet loop doesn't look stuck.
+        self._last: dict[str, Any] | None = None
+        self._next_at: float | None = None
 
     def start(self, *, seconds_per_listing: float) -> None:
         """Begin a scan. ``seconds_per_listing`` comes from the config's pacing."""
@@ -56,6 +60,54 @@ class ProgressTracker:
         with self._lock:
             self._event = None
             self._started = None
+
+    def finish(
+        self,
+        *,
+        found: int,
+        already_seen: int,
+        evaluated: int,
+        matched: int,
+        super_alerts: int,
+        errors: int,
+    ) -> None:
+        """Record a completed scan's totals (and end its live progress)."""
+        with self._lock:
+            self._event = None
+            self._started = None
+            self._last = {
+                "finished_at": time.time(),
+                "found": found,
+                "already_seen": already_seen,
+                "evaluated": evaluated,
+                "matched": matched,
+                "super_alerts": super_alerts,
+                "errors": errors,
+                # Every listing the searches returned had been checked before.
+                "caught_up": found > 0 and already_seen == found,
+            }
+
+    def waiting(self, seconds: float | None) -> None:
+        """The loop is sleeping ``seconds`` until its next scan (None: not waiting)."""
+        with self._lock:
+            self._next_at = time.time() + seconds if seconds is not None else None
+
+    def reset(self) -> None:
+        """Forget everything - the scanner has stopped."""
+        with self._lock:
+            self._event = None
+            self._started = None
+            self._last = None
+            self._next_at = None
+
+    def between_scans(self) -> dict[str, Any] | None:
+        """The last scan's outcome and the wait until the next, or None mid-scan/idle."""
+        with self._lock:
+            if self._event is not None or self._last is None:
+                return None
+            last, next_at = dict(self._last), self._next_at
+        last["next_scan_seconds"] = max(0, int(next_at - time.time())) if next_at else None
+        return last
 
     def snapshot(self) -> dict[str, Any] | None:
         with self._lock:
@@ -88,6 +140,18 @@ class ProgressTracker:
             "elapsed_seconds": int(elapsed),
             "eta_seconds": remaining,
         }
+
+
+def humanize_wait(seconds: int | None) -> str:
+    """'in about 25 minutes' for the gap before the next scan."""
+    if seconds is None:
+        return ""
+    if seconds < 90:
+        return "in less than a minute"
+    minutes = round(seconds / 60)
+    if minutes < 60:
+        return f"in about {minutes} minute{'s' if minutes != 1 else ''}"
+    return f"in about {seconds / 3600:.1f} hours"
 
 
 def humanize_eta(seconds: int | None) -> str:

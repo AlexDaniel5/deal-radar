@@ -51,6 +51,51 @@ async function refreshStatus() {
   }
 
   showProgress(s);
+  showBetweenScans(s);
+}
+
+const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
+
+/**
+ * While "Keep watching" waits for its next scan, say how the last one went.
+ * Without this a quiet loop - everything already checked - looks like it's
+ * stuck or not searching at all.
+ */
+function showBetweenScans(s) {
+  const bar = $('#waitbar');
+  const b = s.between_scans;
+  if (!s.running || s.progress || !b) {
+    bar.hidden = true;
+    return;
+  }
+  bar.hidden = false;
+  bar.classList.toggle('caught-up', Boolean(b.caught_up));
+  let head;
+  let what;
+  if (b.found === 0) {
+    head = 'The last scan found no listings.';
+    what =
+      'Facebook returned nothing for your searches - if this keeps happening, ' +
+      'check your Facebook sign-in under Setup.';
+  } else if (b.caught_up) {
+    head = 'All caught up.';
+    what =
+      `The last scan found ${plural(b.found, 'listing')} and had already checked every one, ` +
+      'so there was nothing new to judge (and nothing spent). New posts will be ' +
+      'picked up as they appear.';
+  } else {
+    head = 'Last scan done.';
+    const newOnes = b.found - b.already_seen;
+    what =
+      `${plural(newOnes, 'new listing')} out of ${b.found}; the AI checked ${b.evaluated}` +
+      (b.matched ? `, ${b.matched} worth a look` : '') +
+      (b.super_alerts ? `, ${plural(b.super_alerts, 'super alert')}` : '') +
+      '.';
+  }
+  if (b.errors) what += ` ${plural(b.errors, 'problem')} - see the log.`;
+  $('#waithead').textContent = head;
+  $('#waitwhat').textContent = what;
+  $('#waitnext').textContent = s.next_scan ? `Next scan ${s.next_scan}.` : '';
 }
 
 /**
@@ -144,7 +189,9 @@ function seenRow(r) {
   // conflated two things, one of which cannot happen.
   const score =
     r.rating != null
-      ? `<span class="rate" title="How well the AI thought this matches what you described">${r.rating} of 5</span>`
+      ? r.rating > 5
+        ? `<span class="rate super" title="Met your super-alert benchmark">Super alert · ${r.rating} of 5</span>`
+        : `<span class="rate" title="How well the AI thought this matches what you described">${r.rating} of 5</span>`
       : '<span class="muted" title="Outside your price range, or it matched a word you excluded">Skipped</span>';
   const pills =
     (r.matched ? '<span class="pill match" title="The AI thinks this is what you\'re looking for">Match</span> ' : '') +

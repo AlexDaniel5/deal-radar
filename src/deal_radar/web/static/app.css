@@ -179,6 +179,9 @@ body.setup-required header [data-scanner] { display: none; }
 }
 .progress-text { display: flex; gap: 12px; margin-top: 6px; flex-wrap: wrap; }
 .progress-note { margin: 4px 0 0; font-size: 12px; }
+/* Between "Keep watching" scans: what the last one found, and when the next is. */
+.waitbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; }
+.waitbar.caught-up #waithead { color: var(--green); }
 
 /* Cost is stated before the click, not discovered on the bill afterwards. */
 .costbar {
@@ -607,4 +610,5 @@ td:nth-child(4) { overflow-wrap: anywhere; }
 }
 a { color: var(--link); }
 .rate { color: var(--amber); font-weight: 600; white-space: nowrap; }
+.rate.super { color: var(--red, #c0392b); text-transform: uppercase; letter-spacing: 0.02em; }
 #savemsg { margin-left: 10px; }

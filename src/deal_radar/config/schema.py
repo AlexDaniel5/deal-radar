@@ -133,6 +133,13 @@ class ItemConfig(BaseModel):
     location: str | None = None
     radius_km: int | None = Field(None, ge=1)
     description: str = Field(min_length=1, description="Free text the AI judges listings against.")
+    super_alert: str | None = Field(
+        None,
+        description=(
+            "A benchmark listing: anything at least this good, at this price or less, is "
+            "sent as an urgent 6/5 alert straight away instead of waiting for the digest."
+        ),
+    )
     min_rating: int | None = Field(
         None, ge=1, le=5, description="Overrides ai.min_rating for this item."
     )

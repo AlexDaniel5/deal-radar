@@ -37,8 +37,8 @@ scan:
 # When enabled, a match creates a *draft* message you review and approve in the
 # web UI before it is sent; nothing ever goes out automatically.
 messaging:
-  enabled: false
-  negotiate: false      # true => drafts open with an offer instead of asking price
+  enabled: true
+  negotiate: true       # true => drafts open with an offer instead of asking price
   offer_percent: 90     # offer = 90% of asking, rounded to the nearest $5, never above asking
 
 notifiers:
@@ -65,3 +65,13 @@ items:
     description: |
       A modern gaming desktop with an Nvidia RTX 3070 / AMD Radeon RX 6700 XT or better (Nvidia or AMD only, no Intel Arc) and a Ryzen 5/7 or Intel i5/i7 (10th gen or newer). Want 16GB+ RAM; DDR5 preferred, but DDR4 is fine. An SSD is a bonus. Not interested in old office PCs, GTX 16-series cards, or parts-only units. A good deal is meaningfully below typical local resale for the GPU.
 
+    super_alert: |
+      Benchmark (alert me immediately for anything at least this good at CA$1,400 or less):
+      CPU Intel Core i7-10700KF (8 cores / 16 threads, up to 5.1 GHz); GPU RTX 3080 10GB
+      (e.g. Zotac Trinity OC); RAM 32GB DDR4-3600 CL16 as 2 x 16GB sticks; Z590-class
+      motherboard (e.g. Gigabyte Z590 Aorus Elite); 1TB NVMe SSD (Samsung 970 EVO class);
+      280mm AIO liquid cooler (Arctic Liquid Freezer II 280 class); quality 850W PSU
+      (Corsair TX850M class); airflow case (Corsair 4000D Airflow class); Windows 11 Pro;
+      used, like-new condition. A faster CPU or GPU, DDR5, or more RAM/storage counts as better.
+      HARD REQUIREMENT: the RAM must be 2 sticks (e.g. 2 x 16GB). 4 x 8GB or any 4-stick
+      kit does NOT qualify, and if the stick layout isn't stated, it does not qualify.

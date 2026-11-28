@@ -139,3 +139,23 @@ def test_ntfy_raises_on_http_error() -> None:
     client = httpx.Client(transport=httpx.MockTransport(handler))
     with pytest.raises(NotifyError):
         NtfyNotifier(NtfyNotifierConfig(topic="t"), client=client).notify(_event())
+
+
+def test_ntfy_super_alert_is_urgent_and_flagged() -> None:
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["json"] = json.loads(request.content)
+        return httpx.Response(200)
+
+    event = _event()
+    event.evaluation.rating = 6
+    event.evaluation.super_deal = True
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    # A configured lower priority must not downgrade a super alert.
+    NtfyNotifier(NtfyNotifierConfig(topic="t", priority=2), client=client).notify(event)
+
+    body = captured["json"]
+    assert body["title"].startswith("SUPER ALERT [6/5]")
+    assert body["priority"] == 5
+    assert body["tags"][0] == "rotating_light"

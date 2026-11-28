@@ -75,9 +75,7 @@ class FakeEvaluator:
 
 
 def _item() -> ItemConfig:
-    return ItemConfig(
-        name="PC", marketplaces=["facebook"], search_phrases=["pc"], description="d"
-    )
+    return ItemConfig(name="PC", marketplaces=["facebook"], search_phrases=["pc"], description="d")
 
 
 # --- the pipeline hook ---------------------------------------------------------
@@ -190,9 +188,7 @@ def test_tracker_reports_the_latest_event() -> None:
     tracker = ProgressTracker()
     tracker.start(seconds_per_listing=50)
     tracker.record(
-        ProgressEvent(
-            phase="evaluating", item="PC", item_index=1, item_count=1, checked=3, of=10
-        )
+        ProgressEvent(phase="evaluating", item="PC", item_index=1, item_count=1, checked=3, of=10)
     )
     snap = tracker.snapshot()
     assert snap is not None
@@ -206,9 +202,7 @@ def test_tracker_eta_uses_the_configured_pacing_before_it_can_measure() -> None:
     tracker = ProgressTracker()
     tracker.start(seconds_per_listing=50)
     tracker.record(
-        ProgressEvent(
-            phase="evaluating", item="PC", item_index=1, item_count=1, checked=1, of=11
-        )
+        ProgressEvent(phase="evaluating", item="PC", item_index=1, item_count=1, checked=1, of=11)
     )
     snap = tracker.snapshot()
     assert snap is not None
@@ -298,9 +292,7 @@ def test_status_exposes_progress_and_a_human_eta(tmp_path: Any) -> None:
     )
     progress_mod.TRACKER.start(seconds_per_listing=50)
     progress_mod.TRACKER.record(
-        ProgressEvent(
-            phase="evaluating", item="PC", item_index=1, item_count=2, checked=2, of=10
-        )
+        ProgressEvent(phase="evaluating", item="PC", item_index=1, item_count=2, checked=2, of=10)
     )
     try:
         body = TestClient(app).get("/api/status").json()
@@ -309,3 +301,74 @@ def test_status_exposes_progress_and_a_human_eta(tmp_path: Any) -> None:
         assert body["eta"].startswith("about") or body["eta"].startswith("less")
     finally:
         progress_mod.TRACKER.clear()
+
+
+# --- between "Keep watching" scans ---------------------------------------------------
+
+
+def _finish(tracker, *, found: int, already_seen: int, evaluated: int = 0) -> None:
+    tracker.finish(
+        found=found,
+        already_seen=already_seen,
+        evaluated=evaluated,
+        matched=0,
+        super_alerts=0,
+        errors=0,
+    )
+
+
+def test_between_scans_reports_caught_up_and_next_scan() -> None:
+    from deal_radar.web.progress import ProgressTracker
+
+    t = ProgressTracker()
+    assert t.between_scans() is None  # nothing has run yet
+    t.start(seconds_per_listing=10)
+    _finish(t, found=153, already_seen=153)
+    t.waiting(1800)
+    b = t.between_scans()
+    assert b is not None
+    assert b["caught_up"] is True
+    assert 1790 <= b["next_scan_seconds"] <= 1800
+
+
+def test_between_scans_not_caught_up_when_something_was_new() -> None:
+    from deal_radar.web.progress import ProgressTracker
+
+    t = ProgressTracker()
+    _finish(t, found=20, already_seen=15, evaluated=5)
+    b = t.between_scans()
+    assert b is not None and b["caught_up"] is False
+    assert b["next_scan_seconds"] is None  # not sleeping yet
+
+
+def test_between_scans_hidden_mid_scan_and_after_reset() -> None:
+    from deal_radar.pipeline import ProgressEvent
+    from deal_radar.web.progress import ProgressTracker
+
+    t = ProgressTracker()
+    _finish(t, found=5, already_seen=5)
+    t.start(seconds_per_listing=10)
+    t.record(
+        ProgressEvent(
+            phase="searching",
+            item="PC",
+            item_index=1,
+            item_count=1,
+            checked=0,
+            of=None,
+            found=0,
+            matched=0,
+            title=None,
+        )
+    )
+    assert t.between_scans() is None  # a scan is running: the progress bar covers it
+    t.reset()
+    assert t.between_scans() is None
+
+
+def test_humanize_wait() -> None:
+    from deal_radar.web.progress import humanize_wait
+
+    assert humanize_wait(None) == ""
+    assert humanize_wait(30) == "in less than a minute"
+    assert humanize_wait(1500) == "in about 25 minutes"

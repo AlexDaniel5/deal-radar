@@ -29,6 +29,7 @@ class ScanStats:
     matched: int = 0
     drafted: int = 0
     notified: int = 0
+    super_alerts: int = 0
     errors: int = 0
 
 
@@ -84,8 +85,8 @@ def format_stats(stats: ScanStats) -> str:
     return (
         f"{stats.item}: found={stats.found} new_seen_skipped={stats.skipped_seen} "
         f"filtered={stats.skipped_filter} evaluated={stats.evaluated} "
-        f"matched={stats.matched} drafted={stats.drafted} notified={stats.notified} "
-        f"errors={stats.errors}"
+        f"matched={stats.matched} super={stats.super_alerts} drafted={stats.drafted} "
+        f"notified={stats.notified} errors={stats.errors}"
     )
 
 
@@ -202,6 +203,31 @@ def scan_item(
         stats.evaluated += 1
         store.mark_seen(item.name, listing, evaluation)
 
+        if evaluation.super_deal:
+            # Too good to wait for the end-of-scan digest (which can be an hour
+            # away): alert now, and leave it out of the digest so it isn't sent twice.
+            stats.matched += 1
+            stats.super_alerts += 1
+            log.info(
+                "SUPER ALERT %s [%d/5]: %s (%s)",
+                item.name,
+                evaluation.rating,
+                listing.title,
+                listing.url,
+            )
+            progress("notifying", title=listing.title)
+            _send_now(
+                item=item,
+                listing=listing,
+                evaluation=evaluation,
+                notifiers=notifiers,
+                drafter=drafter,
+                dry_run=dry_run,
+                stats=stats,
+            )
+            progress("checked", title=listing.title)
+            continue
+
         if not (evaluation.match and evaluation.rating >= threshold):
             progress("checked", title=listing.title)
             continue
@@ -231,6 +257,54 @@ def scan_item(
     return stats
 
 
+def _make_event(
+    item: ItemConfig,
+    listing: Listing,
+    evaluation: Evaluation,
+    drafter: Drafter | None,
+    stats: ScanStats,
+) -> NotificationEvent:
+    """Draft a seller message if messaging is on, and wrap the match for notifiers."""
+    draft_pending = False
+    if drafter is not None:
+        try:
+            drafter.draft(item, listing, evaluation)
+            stats.drafted += 1
+            draft_pending = True
+        except Exception as exc:  # noqa: BLE001 - a failed draft shouldn't kill the scan
+            stats.errors += 1
+            log.warning("drafting a seller message for %s failed: %s", listing.id, exc)
+    return NotificationEvent(
+        item_name=item.name,
+        listing=listing,
+        evaluation=evaluation,
+        draft_pending=draft_pending,
+    )
+
+
+def _send_now(
+    *,
+    item: ItemConfig,
+    listing: Listing,
+    evaluation: Evaluation,
+    notifiers: Sequence[Notifier],
+    drafter: Drafter | None,
+    dry_run: bool,
+    stats: ScanStats,
+) -> None:
+    """Send one match immediately (a super alert) rather than in the digest."""
+    if dry_run:
+        return
+    event = _make_event(item, listing, evaluation, drafter, stats)
+    for notifier in notifiers:
+        try:
+            notifier.notify(event)
+            stats.notified += 1
+        except Exception as exc:  # noqa: BLE001 - one failed notifier shouldn't kill the scan
+            stats.errors += 1
+            log.warning("super alert via %s failed: %s", notifier.type, exc)
+
+
 def _notify_best(
     *,
     item: ItemConfig,
@@ -255,25 +329,9 @@ def _notify_best(
     if dry_run:
         return
 
-    events: list[NotificationEvent] = []
-    for listing, evaluation in top:
-        draft_pending = False
-        if drafter is not None:
-            try:
-                drafter.draft(item, listing, evaluation)
-                stats.drafted += 1
-                draft_pending = True
-            except Exception as exc:  # noqa: BLE001 - a failed draft shouldn't kill the scan
-                stats.errors += 1
-                log.warning("drafting a seller message for %s failed: %s", listing.id, exc)
-        events.append(
-            NotificationEvent(
-                item_name=item.name,
-                listing=listing,
-                evaluation=evaluation,
-                draft_pending=draft_pending,
-            )
-        )
+    events = [
+        _make_event(item, listing, evaluation, drafter, stats) for listing, evaluation in top
+    ]
 
     for notifier in notifiers:
         try:

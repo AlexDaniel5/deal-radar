@@ -29,6 +29,18 @@ class Verdict(BaseModel):
         description="1 = irrelevant or a bad deal; 5 = excellent match and a great price.",
     )
     rationale: str = Field(description="One concise sentence explaining the verdict.")
+    super_deal: bool = Field(
+        False,
+        description=(
+            "True only if a super-alert benchmark is given AND this listing is at least as "
+            "good as it in every respect that matters AND its price is at or below the "
+            "benchmark's. False whenever no benchmark is given or you are unsure."
+        ),
+    )
+
+
+# A super deal is reported as one notch above the normal 1-5 scale.
+SUPER_RATING = 6
 
 
 COMPOSE_SYSTEM = (
@@ -88,4 +100,16 @@ def build_user_prompt(item: ItemConfig, listing: Listing) -> str:
         "Description:",
         listing.description.strip() or "(none provided)",
     ]
+    if item.super_alert and item.super_alert.strip():
+        parts += [
+            "",
+            "## Super-alert benchmark (affects super_deal ONLY)",
+            "This is a separate, higher bar. Judge match and rating exactly as you would "
+            "without it - using only 'What I'm looking for' above - and do NOT lower them "
+            "because the listing misses this benchmark. Then, separately, set super_deal to "
+            "true only if the listing is at least as good as this benchmark (same or better "
+            "parts, condition and completeness, and any stated hard requirements) at the "
+            "same price or less. Missing details count against super_deal.",
+            item.super_alert.strip(),
+        ]
     return "\n".join(parts)

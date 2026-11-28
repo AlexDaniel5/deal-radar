@@ -67,11 +67,15 @@ def test_every_field_has_a_label_and_a_group() -> None:
 def test_every_visible_field_explains_itself() -> None:
     """Advanced fields may be terse; the ones a normal user sees may not be.
 
-    Two exceptions are structural: the notifier `type` selector is rendered as
-    the card's own kind-picker, and carries no help text of its own.
+    Exceptions: the notifier `type` selector is rendered as the card's own
+    kind-picker, and carries no help text of its own; the hunt's city and
+    radius are self-explanatory and deliberately have no help text.
     """
+    unexplained_ok = {"items.*.location", "items.*.radius_km"}
     for field in FIELDS:
         if field["advanced"] or field["path"].endswith(".type"):
+            continue
+        if field["path"] in unexplained_ok:
             continue
         assert field["help"].strip(), f"{field['path']} has no help text"
 

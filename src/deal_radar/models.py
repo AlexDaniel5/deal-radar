@@ -29,6 +29,7 @@ class Evaluation:
     rationale: str
     model: str
     images_analyzed: bool = False  # photos were attached to the AI call
+    super_deal: bool = False  # met the item's super-alert benchmark (rating is then 6)
 
 
 @dataclass(slots=True)

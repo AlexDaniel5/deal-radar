@@ -539,3 +539,59 @@ def test_scan_all_should_stop_skips_items() -> None:
     )
     assert results == []
     assert calls["n"] == 0  # stopped before building any marketplace
+
+
+# --- super alerts ------------------------------------------------------------------
+
+
+def _super() -> Evaluation:
+    return Evaluation(match=True, rating=6, rationale="r", model="m", super_deal=True)
+
+
+def test_super_alert_sent_immediately_and_not_in_digest() -> None:
+    order: list[str] = []
+
+    class OrderEval(FakeEval):
+        def evaluate(self, item: ItemConfig, listing: Listing) -> Evaluation:
+            order.append(f"eval:{listing.id}")
+            return super().evaluate(item, listing)
+
+    class OrderNotifier(FakeNotifier):
+        def notify(self, event: NotificationEvent) -> None:
+            order.append(f"notify:{event.listing.id}")
+            super().notify(event)
+
+    ev = OrderEval({"s": _super(), "a": _good(rating=5), "b": _good(rating=4)})
+    notifier = OrderNotifier()
+    stats = scan_item(
+        item=_item(super_alert="benchmark"),
+        marketplace=FakeMarket([_listing("s"), _listing("a"), _listing("b")]),
+        ctx=_ctx(),
+        evaluator=ev,
+        store=FakeStore(),
+        notifiers=[notifier],
+        ai=AI,
+    )
+    # Sent before the next listing was even evaluated - not at the end of the scan.
+    assert order[:3] == ["eval:s", "notify:s", "eval:a"]
+    assert stats.super_alerts == 1
+    assert stats.matched == 3
+    assert stats.notified == 3
+    # The digest holds only the ordinary matches; the super alert isn't sent twice.
+    assert [[e.listing.id for e in d] for d in notifier.digests] == [["a", "b"]]
+
+
+def test_super_alert_respects_dry_run() -> None:
+    notifier = FakeNotifier()
+    stats = scan_item(
+        item=_item(super_alert="benchmark"),
+        marketplace=FakeMarket([_listing("s")]),
+        ctx=_ctx(),
+        evaluator=FakeEval({"s": _super()}),
+        store=FakeStore(),
+        notifiers=[notifier],
+        ai=AI,
+        dry_run=True,
+    )
+    assert stats.super_alerts == 1
+    assert notifier.events == []

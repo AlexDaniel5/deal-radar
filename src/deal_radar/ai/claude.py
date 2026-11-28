@@ -12,7 +12,7 @@ from ..errors import EvalError
 from ..logging import get_logger
 from ..models import Evaluation, Listing
 from .pricing import METER
-from .prompt import SYSTEM, Verdict, build_user_prompt
+from .prompt import SUPER_RATING, SYSTEM, Verdict, build_user_prompt
 
 log = get_logger("ai.claude")
 
@@ -174,9 +174,14 @@ class ClaudeEvaluator:
         verdict: Verdict | None = response.parsed_output
         if verdict is None:
             raise EvalError(f"Claude returned no structured output for listing {listing.id!r}")
+        # Only trust the flag when there was a benchmark to meet and it's a real match.
+        super_deal = bool(
+            verdict.super_deal and verdict.match and item.super_alert and item.super_alert.strip()
+        )
         return Evaluation(
             match=verdict.match,
-            rating=verdict.rating,
+            rating=SUPER_RATING if super_deal else verdict.rating,
+            super_deal=super_deal,
             rationale=verdict.rationale,
             model=self._ai.model,
             images_analyzed=with_images,

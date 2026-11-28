@@ -242,6 +242,7 @@ function renderField(path, fieldSpec) {
       control = document.createElement('textarea');
       control.rows = fieldSpec.rows || 6;
       control.value = value ?? '';
+      if (fieldSpec.placeholder) control.placeholder = fieldSpec.placeholder;
       control.oninput = () => {
         setIn(draft, path, control.value || undefined);
         markDirty();
@@ -633,7 +634,7 @@ function itemPanel() {
   add.textContent = '+ Add another thing to hunt for';
   add.onclick = () => {
     items.push({
-      name: 'Something new',
+      name: '',
       marketplaces: Object.keys(draft.marketplaces || { facebook: {} }),
       search_phrases: [],
       description: '',
@@ -659,7 +660,7 @@ function emptyItems() {
   add.onclick = () => {
     draft.items = [
       {
-        name: 'My first hunt',
+        name: '',
         marketplaces: Object.keys(draft.marketplaces || {}),
         search_phrases: [],
         description: '',
@@ -978,7 +979,7 @@ function firstRunCard() {
       notifiers: [{ type: 'ntfy', topic: state.starter_topic }],
       items: [
         {
-          name: 'My first hunt',
+          name: '',
           marketplaces: ['facebook'],
           search_phrases: [],
           description: '',

@@ -212,3 +212,37 @@ def test_composer_wraps_sdk_error() -> None:
     composer = ClaudeComposer(AIConfig(), client=_Client(exc=RuntimeError("boom")))
     with pytest.raises(EvalError, match="boom"):
         composer.compose(_item(), _listing(), None)
+
+
+# --- super alerts ------------------------------------------------------------------
+
+
+def test_super_deal_becomes_rating_six_when_benchmark_set() -> None:
+    item = _item().model_copy(update={"super_alert": "RTX 3080, 32GB, for $1400"})
+    client = _Client(parsed=Verdict(match=True, rating=5, rationale="wow", super_deal=True))
+    result = ClaudeEvaluator(AIConfig(), client=client).evaluate(item, _listing())
+    assert result.super_deal is True
+    assert result.rating == 6
+
+
+def test_super_deal_ignored_without_benchmark() -> None:
+    client = _Client(parsed=Verdict(match=True, rating=5, rationale="wow", super_deal=True))
+    result = ClaudeEvaluator(AIConfig(), client=client).evaluate(_item(), _listing())
+    assert result.super_deal is False
+    assert result.rating == 5
+
+
+def test_super_deal_ignored_when_not_a_match() -> None:
+    item = _item().model_copy(update={"super_alert": "RTX 3080 for $1400"})
+    client = _Client(parsed=Verdict(match=False, rating=2, rationale="no", super_deal=True))
+    result = ClaudeEvaluator(AIConfig(), client=client).evaluate(item, _listing())
+    assert result.super_deal is False
+    assert result.rating == 2
+
+
+def test_user_prompt_includes_benchmark_only_when_set() -> None:
+    assert "Super-alert benchmark" not in build_user_prompt(_item(), _listing())
+    item = _item().model_copy(update={"super_alert": "RTX 3080 2x16GB for $1400"})
+    prompt = build_user_prompt(item, _listing())
+    assert "Super-alert benchmark" in prompt
+    assert "RTX 3080 2x16GB for $1400" in prompt

@@ -67,7 +67,11 @@ def build_jobs(
             )
 
         def _sleep(delay: float) -> None:
-            stop.wait(delay)  # interruptible: returns early when stop is set
+            TRACKER.waiting(delay)  # lets the UI say when the next scan is due
+            try:
+                stop.wait(delay)  # interruptible: returns early when stop is set
+            finally:
+                TRACKER.waiting(None)
 
         with SqliteSeenStore(paths.db_path()) as store, open_drafter(cfg) as drafter:
 
@@ -106,14 +110,26 @@ def build_jobs(
                         "(%d listings, all already seen)",
                         total,
                     )
-                TRACKER.clear()
+                TRACKER.finish(
+                    found=sum(s.found for s in collected),
+                    already_seen=sum(s.skipped_seen for s in collected),
+                    evaluated=sum(s.evaluated for s in collected),
+                    matched=sum(s.matched for s in collected),
+                    super_alerts=sum(s.super_alerts for s in collected),
+                    errors=sum(s.errors for s in collected),
+                )
 
-            if loop:
-                run_loop(scan=scan, schedule=cfg.schedule, sleep=_sleep, should_stop=stop.is_set)
-            else:
-                log.info("manual scan starting")
-                scan()
-                log.info("manual scan complete")
+            try:
+                if loop:
+                    run_loop(
+                        scan=scan, schedule=cfg.schedule, sleep=_sleep, should_stop=stop.is_set
+                    )
+                else:
+                    log.info("manual scan starting")
+                    scan()
+                    log.info("manual scan complete")
+            finally:
+                TRACKER.reset()  # stopped: nothing "between scans" to report any more
 
     def run_loop_job(stop: threading.Event) -> None:
         _run(stop, loop=True)

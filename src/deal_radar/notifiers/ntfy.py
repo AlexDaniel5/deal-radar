@@ -37,9 +37,15 @@ class NtfyNotifier:
     def notify(self, event: NotificationEvent) -> None:
         listing = event.listing
         evaluation = event.evaluation
+        tags = ["moneybag", "camera"] if evaluation.images_analyzed else ["moneybag"]
+        title = f"[{evaluation.rating}/5] {event.item_name}"
+        if evaluation.super_deal:
+            # Rotating-light icon, and urgent priority so it breaks through on the phone.
+            tags = ["rotating_light", *tags]
+            title = f"SUPER ALERT [{evaluation.rating}/5] {event.item_name}"
         payload: dict[str, Any] = {
             "topic": self._config.topic,
-            "title": f"[{evaluation.rating}/5] {event.item_name}",
+            "title": title,
             "message": (
                 f"{listing.title}\n"
                 f"{_price(listing)} - {listing.location or 'location unknown'}\n"
@@ -48,8 +54,10 @@ class NtfyNotifier:
             ),
             "click": listing.url,
             # "camera" renders as a 📷 icon: the AI looked through the photos.
-            "tags": ["moneybag", "camera"] if evaluation.images_analyzed else ["moneybag"],
+            "tags": tags,
         }
+        if evaluation.super_deal:
+            payload["priority"] = 5
         self._publish(payload, note=event.item_name)
 
     def notify_digest(self, item_name: str, events: Sequence[NotificationEvent]) -> None:
@@ -92,7 +100,7 @@ class NtfyNotifier:
         self._publish(payload, note=f"{item_name} (top {len(events)})")
 
     def _publish(self, payload: dict[str, Any], *, note: str) -> None:
-        if self._config.priority is not None:
+        if self._config.priority is not None and "priority" not in payload:
             payload["priority"] = self._config.priority
         try:
             response = self._client.post(self._config.server, json=payload)
